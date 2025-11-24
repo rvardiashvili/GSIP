@@ -13,7 +13,8 @@ class DeepLearningRegistrationPipeline(nn.Module):
     Wrapper for KeyMorph-based multi-modal alignment.
     References: "KeyMorph: Robust Multi-modal Affine Registration via Unsupervised Keypoint Detection"
     """
-    def __init__(self, keymorph_network: nn.Module = None, in_channels_s1=2, in_channels_s2=10):
+    def __init__(self, keymorph_network: nn.Module = None,
+     in_channels_s1=2, in_channels_s2=10):
         super().__init__()
         self.keymorph = keymorph_network
         # Placeholder for STN

@@ -1,238 +1,218 @@
-# Documentation: BigEarthNet v2.0 Scalable Analysis Pipeline
+# Technical Reference Manual: BigEarthNet v2.0 Scalable Analysis Pipeline
 
-This document provides a detailed, thesis-level description of the workflow, methodologies, and design principles of the BigEarthNet v2.0 Scalable Analysis Pipeline.
+**Version:** 2.0.0
+**Date:** November 2025
+**System Architecture:** Tiling-Error-Free Multi-Modal Segmentation Engine
+
+---
 
 ## 1. Introduction
 
-### 1.1. Context and Motivation
+### 1.1 System Overview
+The BigEarthNet v2.0 Scalable Analysis Pipeline is a high-performance computing (HPC) framework designed for the semantic segmentation of gigapixel-scale satellite imagery. Unlike standard computer vision tasks that operate on fixed-size images (e.g., $512 \times 512$), Earth Observation (EO) data arrives in massive "tiles" (e.g., Sentinel-2 granules are $10,980 \times 10,980$ pixels).
 
-The proliferation of Earth observation satellites has led to an unprecedented volume of high-resolution remote sensing data. Datasets like BigEarthNet, derived from the European Space Agency's (ESA) Sentinel-2 mission, offer vast potential for monitoring our planet's surface. However, the sheer scale of this data presents significant computational challenges. A single Sentinel-2 tile can be several gigabytes in size, making it infeasible to process as a single unit on standard hardware.
+This system addresses four critical engineering challenges in EO Deep Learning:
+1.  **Memory Management:** Processing images exceeding GPU VRAM capacity (20GB+ uncompressed).
+2.  **Spatial Continuity:** Eliminating "grid artifacts" caused by naive tiling strategies through a mathematically rigorous Overlap-Tile approach.
+3.  **Multi-Modal Alignment:** Handling the asynchronous and spatially disjoint nature of Optical (Sentinel-2) and Radar (Sentinel-1) data.
+4.  **Probabilistic Uncertainty:** Moving beyond simple class labels to provide pixel-wise uncertainty quantification (Entropy, Confidence).
 
-This project addresses the "Big Data" challenge in remote sensing by developing a scalable pipeline for land cover classification. The primary goal is to create a system that can efficiently process large Sentinel-2 tiles, producing accurate land cover maps and associated quality metrics. This work serves as a foundational component for large-area mapping and a baseline for future research in scalable geospatial analysis.
+### 1.2 Mathematical Notation
+*   $\mathbf{I}$: Input Image Tensor.
+*   $\Omega$: The spatial domain of the full tile.
+*   $\mathcal{Z}$: Zone of Responsibility (valid output region).
+*   $\mathcal{H}$: Halo region (context margin).
+*   $f(\cdot)$: The neural network function (U-Net/ResNet).
+*   $P$: Patch size (network input size).
+*   $S$: Stride (step size for sliding window).
 
-### 1.2. The BigEarthNet-S2 Dataset
+---
 
-The pipeline is designed to work with data structured like the BigEarthNet-S2 dataset. BigEarthNet-S2 is a large-scale, multi-label land cover classification dataset, containing 125 Sentinel-2 tiles acquired over 10 European countries. Each tile is annotated with multiple land cover classes from the CORINE Land Cover database. This project leverages a model pre-trained on this dataset, inheriting its rich semantic understanding of land cover types.
+## 2. Data Ingestion & Signal Processing
 
-### 1.3. Problem Statement
+The pipeline implements a robust Extract-Transform-Load (ETL) process that standardizes heterogeneous sensor data into a unified tensor representation.
 
-The core problem is to perform semantic segmentation on a full, un-patched Sentinel-2 tile, which can be as large as 10980x10980 pixels. Given memory and computational constraints, the task is to design a workflow that:
+### 2.1 Sentinel-2 (Optical) Pre-processing
 
-1.  Processes the image without requiring the entire tile to be loaded into memory at once.
-2.  Utilizes a pre-trained deep learning model for accurate, patch-based classification.
-3.  Aggregates patch-level predictions into a seamless, tile-level classification map.
-4.  Generates auxiliary data products to aid in the interpretation and quality assessment of the classification results.
+Sentinel-2 L2A (Level-2A) data represents Bottom-of-Atmosphere (BOA) reflectance. The pipeline handles the complex directory structure of `.SAFE` archives.
 
-### 2. Methodology and Workflow
+#### 2.1.1 Resolution Unification
+Sentinel-2 bands have varying spatial resolutions: 10m, 20m, and 60m.
+*   **Reference Grid:** The 10m band `B02` (Blue) is selected as the geospatial anchor. All spatial transforms are calculated relative to `B02`'s affine transform matrix $\mathbf{M}_{ref}$.
+*   **Resampling Algorithm:** Lower resolution bands (e.g., `B05` at 20m) are upsampled using **Nearest Neighbor Interpolation**.
+    *   *Rationale:* Bilinear or Bicubic interpolation introduces synthetic values (smoothing) that physically do not exist, potentially confusing the spectral signature learned by the CNN. Nearest Neighbor preserves the original radiometric values.
 
+#### 2.1.2 Radiometric Calibration
+Digital Numbers (DN) are converted to physical reflectance $\rho$. The pipeline implements logic to handle ESA's Processing Baseline (PB) changes.
 
+$$ \rho_{\lambda}(x, y) = \frac{\text{DN}_{\lambda}(x, y) + \Delta_{offset}}{Q_{value}} $$
 
+*   $Q_{value} = 10000$ (Scaling factor).
+*   $\Delta_{offset}$:
+    *   For PB $< 04.00$ (Pre-2022): $\Delta_{offset} = 0$.
+    *   For PB $\ge 04.00$ (Post-2022): $\Delta_{offset} = -1000$.
 
+### 2.2 Sentinel-1 (SAR) Pre-processing
 
-The pipeline employs a "divide and conquer" strategy, processing the large input tile in a series of stages.
+Sentinel-1 GRD (Ground Range Detected) data provides Synthetic Aperture Radar backscattering intensities in VV and VH polarizations.
 
+#### 2.2.1 On-the-Fly Virtual Reprojection
+S1 and S2 data are rarely pixel-aligned. S1 data often comes in a different Coordinate Reference System (CRS) or non-orthorectified grids.
+*   **Method:** The pipeline utilizes `rasterio.vrt.WarpedVRT` to perform "lazy" reprojection.
+*   **Algorithm:**
+    1.  Read Ground Control Points (GCPs) from the S1 manifest.
+    2.  Compute the thin-plate spline (TPS) or polynomial transform to map S1 pixels to the S2 CRS.
+    3.  Resample pixels only when requested by the inference engine (Lazy Evaluation).
 
+#### 2.2.2 Backscatter Conversion
+Raw S1 Amplitude ($A$) is distributed exponentially and is unsuitable for CNNs. We convert it to the logarithmic decibel (dB) scale:
 
+$$ \sigma^0_{dB} = 20 \cdot \log_{10}(A) - K_{calib} $$
 
+*   $K_{calib}$: Calibration constant (set to **50.0** in `src/ben_v2/data.py` to align mean statistics with BigEarthNet distributions).
 
+#### 2.2.3 Dynamic Range Clipping
+SAR data contains extreme outliers due to specular reflections (e.g., skyscrapers acting as corner reflectors).
+*   **Clipping Range:** $[-50.0, 30.0]$ dB.
+*   *Impact:* Values $<-50$ dB are treated as noise floor; values $>30$ dB are clamped to prevent gradient explosions in the network.
 
+---
 
-### 2.1. Data Acquisition
+## 3. The ERF-Aware Inference Algorithm
 
+A Convolutional Neural Network (CNN) has an **Effective Receptive Field (ERF)**—the region of input pixels that theoretically contributes to a specific output pixel. At the edges of an input image, the ERF is truncated (padding), leading to degraded prediction accuracy (boundary artifacts).
 
+To solve this, we implement the **Overlap-Tile Strategy** with a strict Zone of Responsibility.
 
+### 3.1 Theoretical Tiling Model
 
+We decompose the massive image $\Omega$ into a set of processing chunks $C_k$. Each chunk consists of two regions:
 
-A dedicated module (`download_sentinel.py`) handles the acquisition of input data from the Copernicus Dataspace Ecosystem. It is designed to retrieve matching pairs of Sentinel-1 (SAR) and Sentinel-2 (Optical) imagery.
+1.  **Zone of Responsibility ($\mathcal{Z}$):** The central area where predictions are valid.
+2.  **Halo ($\mathcal{H}$):** A context margin surrounding $\mathcal{Z}$.
 
+The dimensions are related by:
+$$ \text{Chunk}_{dim} = \text{ZoR}_{dim} + 2 \cdot \text{Halo}_{pixels} $$
 
+*   **ZoR Size:** Configurable (e.g., 4000 px). Represents the write-stride.
+*   **Halo Size:** Must be $\ge \frac{ERF}{2}$. For ResNet-50, typical ERF suggests a halo of ~128 pixels is safe.
 
+### 3.2 Inference Workflow
 
+For each tile coordinate $(r, c)$:
 
+1.  **Read:** Extract window $[r - \text{Halo} : r + \text{ZoR} + \text{Halo}, \quad c - \text{Halo} : c + \text{ZoR} + \text{Halo}]$.
+2.  **Pad:** If the window extends beyond the physical image boundaries, apply **Reflection Padding**:
+    $$ \mathbf{I}_{pad}(x) = \mathbf{I}(|x|) \quad \text{for } x < 0 $$
+    This mirrors the texture at the edge, minimizing high-frequency edge features that zero-padding would introduce.
+3.  **Infer:** Pass the full padded chunk through the network.
+4.  **Crop:** Extract the central $\mathcal{Z}$ region from the probability map $\mathbf{P}_{out}$.
+    $$ \mathbf{P}_{valid} = \mathbf{P}_{out}[\text{Halo} : -\text{Halo}, \quad \text{Halo} : -\text{Halo}] $$
+5.  **Write:** Save $\mathbf{P}_{valid}$ to the output mosaic at position $(r, c)$.
 
+---
 
--   **Sentinel-2 Selection:** Filters for products with low cloud coverage (< 10%) within the specified time window and Area of Interest (AOI).
+## 4. Patch-Level Processing & Probabilistic Reconstruction
 
+Ideally, we would feed the entire Chunk (e.g., $4256 \times 4256$) into the GPU. However, VRAM limitations necessitate breaking the Chunk into smaller **Patches** (e.g., $120 \times 120$).
 
+### 4.1 Sliding Window Generation
+*   **Patch Size ($W_p$):** 120.
+*   **Stride ($S_p$):** 60 (50% overlap).
 
--   **Sentinel-1 Matching:** For each selected Sentinel-2 product, the system searches for a spatially overlapping Sentinel-1 GRD product acquired within a close temporal window (e.g., +/- 2 days).
+This dense overlapping ensures that every pixel in the Chunk is predicted by multiple passes of the CNN (typically 4 times for internal pixels).
 
+### 4.2 Soft-Voting (Sinusoidal Weighting)
+Simple averaging of overlapping patches is suboptimal because CNN predictions are less accurate near the borders of a patch (padding effects). We employ a weighted average where pixels near the center of a patch contribute more.
 
+**The 2D Weighting Window $\mathbf{W}$:**
+Constructed as the outer product of two 1D Hann (squared sine) windows:
 
--   **Pairing:** Valid pairs are downloaded and organized into a directory structure suitable for processing.
+$$ w(n) = \sin^2\left(\frac{\pi n}{W_p - 1}\right), \quad 0 \le n < W_p $$
+$$ \mathbf{W}(i, j) = w(i) \cdot w(j) $$
 
+### 4.3 Aggregation Formula
+Let $\mathcal{P}_k$ be the probability map for the $k$-th patch, and $\mathbf{W}_k$ be its weighting window placed at offset $(u_k, v_k)$. The aggregated probability map $\mathbf{M}$ for the chunk is:
 
+$$ \mathbf{M}(x, y) = \frac{\sum_{k} \mathcal{P}_k(x-u_k, y-v_k) \cdot \mathbf{W}(x-u_k, y-v_k)}{\sum_{k} \mathbf{W}(x-u_k, y-v_k)} $$
 
+This results in a seamless, artifact-free probability surface.
 
+---
 
+## 5. Uncertainty Quantification
 
+The system produces auxiliary geospatial layers to assess model reliability.
 
-### 2.2. Input Data and Pre-processing
+### 5.1 Shannon Entropy (Uncertainty)
+Measures the "confusion" of the model. High entropy implies the probability mass is spread across many classes.
 
-The pipeline ingests a single Sentinel-2 tile, represented as a folder of individual band files (e.g., `B01.jp2`, `B02.jp2`, etc.). These are typically Top-of-Atmosphere (L1C) or Bottom-of-Atmosphere (L2A) reflectance products.
+$$ H(x, y) = -\sum_{c=1}^{C} p_c(x,y) \cdot \log_2(p_c(x,y) + \epsilon) $$
+*   $C$: Number of classes (19).
+*   $\epsilon = 1e^{-6}$: Numerical stability term.
 
-#### 2.1.1. Band Selection
+### 5.2 Prediction Gap (Margin)
+Measures the margin between the top two contending classes. A small gap indicates high ambiguity between two specific labels.
 
-The model expects a specific set of input bands, as defined in `config.py`. The standard configuration uses either 10 or 12 of the 13 Sentinel-2 bands, depending on the pre-trained model's requirements.
+$$ \text{Gap}(x, y) = P_{(1)}(x, y) - P_{(2)}(x, y) $$
+Where $P_{(n)}$ is the $n$-th highest probability.
 
-#### 2.1.2. Normalization
+---
 
-Per-channel normalization is a critical pre-processing step for deep learning models. Before inference, each input patch is normalized using the mean and standard deviation statistics derived from the BigEarthNet training set. The formula for normalization is:
+## 6. Parallel Architecture (Producer-Consumer)
 
-$$
-\text{patch}_{\text{norm}} = \frac{\text{patch}_{\text{raw}} - \mu}{\sigma}
-$$
+To hide I/O latency and CPU-heavy aggregation costs, the pipeline uses `torch.multiprocessing`.
 
-Where $\mu$ and $\sigma$ are the per-band mean and standard deviation vectors, respectively. This ensures that the input data has a similar distribution to the data the model was trained on.
+1.  **Main Process (Producer):**
+    *   Reads GeoTIFF chunks.
+    *   Applies pre-processing/warping.
+    *   Batches patches to GPU.
+    *   Executes Model Forward Pass (`model(x)`).
+    *   Pushes raw probability tensors to `Queue`.
 
-### 2.2. Scalable Processing: Chunking and Patching
+2.  **Writer Process (Consumer):**
+    *   Pulls tensors from `Queue`.
+    *   Performs Sinusoidal Aggregation (CPU intensive).
+    *   Calculates Metrics (Entropy, Gap).
+    *   Writes to Disk (GeoTIFF compression).
 
-To manage memory usage, the pipeline uses a two-level spatial division strategy.
+---
 
-#### 2.2.1. Chunking
+## 7. Configuration System (Hydra)
 
-The full Sentinel-2 tile is first divided into a grid of non-overlapping **chunks**. The size of these chunks (`CHUNK_SIZE`) is a key configuration parameter. A larger `CHUNK_SIZE` can improve processing efficiency by reducing the number of I/O operations, but it also increases the memory footprint. The optimal size is a trade-off between processing speed and available RAM. Each chunk is processed independently.
+The entire pipeline is controlled via hierarchical YAML configurations using **Hydra**.
 
-#### 2.2.2. Patching
+**Root:** `configs/config.yaml`
 
-Each chunk is then further subdivided into smaller, overlapping **patches**. These patches are the atomic units of processing for the neural network. The `PATCH_SIZE` parameter defines the dimensions of these patches.
+### 7.1 Inference Parameters (`configs/pipeline/inference_params.yaml`)
+| Parameter | Key | Definition |
+| :--- | :--- | :--- |
+| **Zone of Responsibility** | `tiling.zone_of_responsibility_size` | The atomic unit of output writing (e.g., 4000). Controls RAM usage. |
+| **Halo** | `tiling.halo_size_pixels` | The context margin (e.g., 128). Must be $\ge$ Half-Receptive-Field. |
+| **Patch Size** | `tiling.patch_size` | CNN input dimension (e.g., 120). |
+| **Stride** | `tiling.patch_stride` | Sliding window step (e.g., 60). |
+| **Batch Size** | `distributed.gpu_batch_size` | Number of patches processed per CUDA call. |
 
-The use of overlapping patches is a crucial design choice. It helps to mitigate "edge effects"—artifacts that can appear at the boundaries of predictions. By averaging the predictions from overlapping patches, the final output is smoother and more spatially consistent. The stride of the overlap is typically `PATCH_SIZE / 2`.
+### 7.2 Model Parameters (`configs/model/*.yaml`)
+| Parameter | Key | Definition |
+| :--- | :--- | :--- |
+| **Target** | `_target_` | Class path for dynamic instantiation (e.g., `ben_v2.model.BigEarthNetv2_0_ImageClassifier`). |
+| **Means** | `means` | List of channel-wise means for normalization. |
+| **Stds** | `stds` | List of channel-wise standard deviations. |
 
-### 2.3. Deep Learning Model and Inference
+---
 
-#### 2.3.1. Model Architecture
+## 8. Multi-Modal Deep Learning Fusion
 
-The pipeline uses the `configilm` library, which provides a flexible framework for creating image and language models. The `BigEarthNetv2_0_ImageClassifier` is a `lightning.pytorch` wrapper around a `ConfigILM` model. This architecture is designed for multi-label image classification. The specific model configuration (e.g., backbone, number of layers) is loaded along with the pre-trained weights from the Hugging Face Hub, specified by the `REPO_ID`.
+For configurations enabling fusion (`use_sentinel_1: true`), the pipeline utilizes the `DeepLearningRegistrationPipeline` module (`src/ben_v2/fusion.py`).
 
-#### 2.3.2. Inference Process
+### 8.1 Spatial Transformer Network (STN) Flow
+Instead of relying solely on geometric GCP alignment, this module allows for feature-based alignment:
 
-For each patch within a chunk, the model performs a forward pass and outputs a vector of logits, one for each of the 19 land cover classes. These logits are then transformed into probabilities using the element-wise sigmoid function:
+1.  **Feature Extraction:** A shared encoder extracts keypoints from S1 (Source) and S2 (Target).
+2.  **Regression:** A regressor predicts the affine transformation matrix $\theta$ (6 parameters).
+3.  **Grid Generation:** $G = \text{affine\_grid}(\theta, \text{size})$.
+4.  **Sampling:** $S1_{aligned} = \text{grid\_sample}(S1_{input}, G)$.
+5.  **Concatenation:** $X_{input} = \text{Concat}(S1_{aligned}, S2)$.
 
-$$ P(\text{class}_i) = \sigma(\text{logit}_i) = \frac{1}{1 + e^{-\text{logit}_i}} $$
-
-The sigmoid function is used because the problem is multi-label, meaning a single patch can contain multiple land cover classes.
-
-### 2.4. Probability Aggregation and Smoothing
-
-A key innovation of this pipeline is the method for reconstructing a smooth, chunk-level probability map from the overlapping patch predictions. A naive averaging would give undue weight to the centers of patches. Instead, a weighted averaging scheme is employed, where the influence of each patch's prediction is highest at its center and decays towards its edges.
-
-This is achieved using a 2D sine window function as a weighting mask:
-
-$$ W(x, y) = \sin^2\]\left(\frac{\pi x}{P_w}\right) \cdot \sin^2\]\left(\frac{\pi y}{P_h}\right) $$
-
-Where $P_w$ and $P_h$ are the width and height of the patch (`PATCH_SIZE`).
-
-The final aggregated probability for each class $c$ at each pixel $(x, y)$ in the chunk is calculated as:
-
-$$ P_{\text{agg}, c}(x, y) = \frac{\sum_{i \in \text{patches}} P_{i, c}(x, y) \cdot W(x_i, y_i)}{\sum_{i \in \text{patches}} W(x_i, y_i)} $$
-
-Where the sum is over all patches $i$ that cover the pixel $(x, y)$, and $(x_i, y_i)$ are the coordinates within patch $i$.
-
-### 2.6. Extensibility: Extra Data Generators
-
-From the final, aggregated probability map for each chunk, a suite of geospatial data products is generated. These are then mosaicked together to form the full, tile-level output files.
-
--   **Classification Map (`*_class.tif`):** The final land cover class for each pixel is determined by selecting the class with the highest probability (the `argmax` of the probability vector).
-
--   **Maximum Probability (`*_maxprob.tif`):** This is the probability of the winning class, representing the model's confidence in its prediction.
-
--   **Shannon Entropy (`*_entropy.tif`):** This is a measure of the uncertainty of the prediction. It is calculated from the probability vector $\mathbf{p}$ for each pixel:
-
-    $$ H(\mathbf{p}) = -\sum_{i=1}^{N} p_i \log_2(p_i) $$
-
-    High entropy values indicate that the model is uncertain, with probabilities spread across multiple classes. This can be useful for identifying areas of confusion or potential misclassification.
-
--   **Prediction Gap (`*_gap.tif`):** This is the difference between the highest and second-highest class probabilities. A small gap suggests that the model found it difficult to distinguish between the top two candidate classes.
-
--   **Full Probabilities (`*_probs.tif`):** An optional, multi-band GeoTIFF that stores the full probability vector for each pixel. This is a rich data product that allows for more advanced post-processing and analysis.
-
-
-
-
-
-
-
--   **Single Node Viewer (`viewer.html`):** An interactive HTML dashboard generated for each processed tile. It provides a user-friendly interface to view the classification preview, the legend, and potentially other metrics, facilitating immediate visual inspection without specialized GIS software.
-
-
-
-
-
-
-
-All GeoTIFF outputs are created with tiling and LZW compression to optimize for storage and read performance.
-
-### 3.1. Asynchronous Processing & Performance
-
-
-
-To improve throughput, the pipeline uses a multi-threaded, producer-consumer architecture.
-
-
-
--   **Producer Thread:** The main thread reads the input data, creates chunks and patches, and performs the GPU-intensive model inference. It places the results (patch probabilities) into a queue.
-
--   **Consumer Thread (Mosaicking Worker):** A separate worker thread retrieves the results from the queue, performs the probability aggregation, calculates the output products, and writes the final chunk-level rasters to disk.
-
-
-
-This design allows the GPU to be kept busy with inference while the CPU-bound aggregation and I/O operations happen in parallel.
-
-
-
-A key performance optimization is the pre-calculation of the sinusoidal weighting masks used for smoothing. Instead of being wastefully regenerated for every processed chunk, these masks are created once at the beginning of the pipeline and reused, significantly reducing computational overhead.
-
-
-
-### 3.2. Benchmark Mode and Viewer
-
-
-
-The pipeline includes a benchmark mode to facilitate performance testing and analysis across multiple tiles. When run with the `--benchmark` flag, the script will:
-
-1.  Iterate through all tile subdirectories in a given input directory.
-
-2.  Process each tile sequentially, reusing the loaded model to avoid repeated setup costs.
-
-3.  Record performance metrics for each tile, such as processing time, memory usage, and I/O sizes.
-
-4.  Compile the results into a `benchmark_report.csv` file in the main output directory.
-
-5.  Automatically generate an interactive `viewer.html` file that displays the benchmark report in a sortable table and shows a preview of each processed tile along with its color legend.
-
-
-
-### 3.3. Configuration
-
-The pipeline is highly configurable via [Hydra](https://hydra.cc/), using structured YAML files located in the `configs/` directory.
-
-Key parameters in `configs/pipeline/inference_params.yaml` include:
-
--   `tiling.zone_of_responsibility_size`: The side dimension of the valid output area for each chunk (processing unit).
--   `tiling.halo_size_pixels`: The margin added to each chunk to mitigate edge effects.
--   `tiling.patch_size`: The side dimension of the model input patch (e.g., 120).
--   `distributed.gpu_batch_size`: The number of patches in a batch for GPU inference.
-
-Model parameters (bands, normalization statistics) are defined in `configs/model/`.
-
-Parameters can be overridden at runtime via the command line:
-`python src/main.py pipeline.distributed.gpu_batch_size=64`
-
-
-
-## 4. Future Work and Potential Enhancements
-
-This pipeline provides a robust foundation for large-scale land cover classification. Several avenues for future work exist:
-
-
-
--   **Distributed Computing:** For processing massive collections of tiles, the pipeline could be integrated with a distributed computing framework like Dask or Apache Spark to parallelize processing across multiple nodes in a cluster.
-
--   **Alternative Model Architectures:** The `configilm` framework allows for experimentation with different model backbones (e.g., Vision Transformers, ConvNeXt) which may yield improved accuracy.
-
--   **Uncertainty Quantification:** The existing entropy and gap metrics could be supplemented with more advanced uncertainty quantification techniques, such as Monte Carlo dropout, to provide more reliable estimates of model uncertainty.
-
--   **Data Fusion:** The pipeline could be extended to incorporate data from other sensors (e.g., Sentinel-1 SAR data) to improve classification accuracy, particularly in areas with persistent cloud cover.
-
--   **Active Learning:** The uncertainty maps could be used to guide an active learning workflow, where the model requests human annotation for the most uncertain areas to improve its performance over time.
+*Note: The current implementation defaults to Identity transformation if no weights are provided, relying on the geometric alignment step in Section 2.2.1.*
