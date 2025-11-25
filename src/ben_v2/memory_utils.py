@@ -5,55 +5,113 @@ from typing import Tuple, Union
 def calculate_optimal_zor(
     halo: int = 128, 
     patch_size: int = 120,
-    mem_safety_factor: float = 0.85
+    num_bands: int = 12,
+    num_classes: int = 19,
+    stride_ratio: float = 0.5,
+    is_segmentation: bool = False,
+    mem_safety_factor: float = 0.80,
+    prefetch_queue_size: int = 0,
+    writer_queue_size: int = 4,
+    save_conf: bool = True,
+    save_entr: bool = True,
+    save_gap: bool = True
 ) -> int:
     """
-    Calculates the optimal Zone of Responsibility (ZoR) size based on available system memory.
+    Calculates the optimal Zone of Responsibility (ZoR) size using a precise memory model.
     
-    Heuristic:
-    - Available Memory * Safety Factor
-    - Estimate bytes per pixel (Input + Patches + Output + Overhead)
-    - Calculate Max Side Length
-    - Round down to nearest multiple of LCM of core resolutions (10, 20, 60) & Patch Size.
-      Actually, just rounding to PATCH_SIZE (120) is usually sufficient for alignment.
-      
-    Estimated Bytes Per Pixel of CHUNK (ZoR + 2Halo):
-    1. Input Data (Float32): 12 bands * 4 bytes = 48 bytes
-    2. Patches Tensor (Float32): 
-       With stride=PATCH_SIZE/2, we have 4x overlap.
-       So roughly 4 * 48 bytes = 192 bytes.
-    3. Output Maps (Float32/UInt8):
-       Probabilities (19 classes * 4 bytes) = 76 bytes.
-       Other metrics ~ 20 bytes.
-    4. Overhead (Python objects, intermediate buffers): ~100 bytes.
-    
-    Total ~ 450 bytes per pixel of the PADDED chunk.
-    
-    Math:
-    Max_Pixels = Available_Bytes / 450
-    Max_Chunk_Side = Sqrt(Max_Pixels)
-    Max_ZoR = Max_Chunk_Side - 2 * Halo
+    Formula accounts for:
+    1. Input Patches (Float32):
+       - Multiplied by (PrefetchQueue + 1 Active Batch)
+       - Expansion factor due to overlap: (1/stride_ratio)^2
+    2. Model Output / Logits (Float32):
+       - Multiplied by (WriterQueue + 2 Active Batches)
+       - Size depends on task (Segmentation vs Classification)
+    3. Reconstruction Maps (Float32):
+       - 1 copy in Writer process (avg_probs + weight_sum)
+    4. Metrics Buffers (Float32/UInt8):
+       - Conditional buffers for dominant class, confidence, entropy, gap.
     """
     
     # 1. Get Available Memory in Bytes
     mem = psutil.virtual_memory()
     available_bytes = mem.available * mem_safety_factor
     
-    # 2. Bytes Per Pixel Estimate
-    BYTES_PER_PIXEL = 450
+    BYTES_FLOAT = 4
+    BYTES_UINT8 = 1
     
-    max_pixels = available_bytes / BYTES_PER_PIXEL
+    # --- BPP (Bytes Per Pixel of the CHUNK) Calculation ---
+    
+    # 1. Patches BPP (Float32)
+    # N_patches ~= (H / S)^2. 
+    # Patch Size = P^2 * C_in * 4.
+    # Total Patch Bytes = (H/S)^2 * P^2 * C_in * 4 = H^2 * (P/S)^2 * C_in * 4.
+    # BPP = C_in * 4 * (1/stride_ratio)^2
+    patch_overlap_factor = (1.0 / stride_ratio) ** 2
+    bpp_patches = num_bands * BYTES_FLOAT * patch_overlap_factor
+    
+    # 2. Logits BPP (Float32)
+    if is_segmentation:
+        # Output is (N, C_out, P, P)
+        # Similar geometry to input patches, just C_out instead of C_in
+        bpp_logits = num_classes * BYTES_FLOAT * patch_overlap_factor
+    else:
+        # Classification Output is (N, C_out)
+        # Total Bytes = (H/S)^2 * C_out * 4
+        # BPP = C_out * 4 / S^2
+        stride_pixels = patch_size * stride_ratio
+        bpp_logits = (num_classes * BYTES_FLOAT) / (stride_pixels ** 2)
+
+    # 3. Reconstruction BPP (Float32)
+    # Writer allocates (C_out) * H * W * 4 for avg_probs
+    # + 1 * H * W * 4 for weight_sum
+    bpp_recon = (num_classes + 1) * BYTES_FLOAT
+    
+    # 4. Metrics BPP (Conditional)
+    bpp_metrics = 0
+    bpp_metrics += BYTES_UINT8 # dom (always)
+    
+    if save_conf:
+        bpp_metrics += BYTES_FLOAT # conf
+    
+    if save_entr:
+        bpp_metrics += BYTES_FLOAT # entr
+        
+    if save_gap:
+        # gap output (4 bytes) + top2 intermediate array (2 * 4 bytes)
+        bpp_metrics += (BYTES_FLOAT * 3)
+    
+    # 5. Write Buffer Overhead (Estimate)
+    # Rasterio needs to buffer the chunk being written. 
+    # Approx equal to input bytes (worst case for uncompressed).
+    bpp_io = num_bands * BYTES_FLOAT
+    
+    # --- Total System Footprint per Pixel ---
+    # Weighted by how many copies exist in queues
+    
+    # Patches: Exist in Prefetch Queue (if any) + Inference Input
+    total_bpp_patches = bpp_patches * (prefetch_queue_size + 1)
+    
+    # Logits: Exist as Inference Output + Writer Queue + Writer Processing
+    # We add +2 (1 for Inference Engine output holding, 1 for current Writer item)
+    total_bpp_logits = bpp_logits * (writer_queue_size + 2)
+    
+    # Recon & Metrics: Exist only in Writer
+    total_bpp_recon = bpp_recon + bpp_metrics
+    
+    overhead_bpp = 200 # Python overhead
+    
+    total_bpp = total_bpp_patches + total_bpp_logits + total_bpp_recon + bpp_io + overhead_bpp
+    
+    # --- Solve for ZoR ---
+    max_pixels = available_bytes / total_bpp
     max_chunk_side = int(math.sqrt(max_pixels))
     
-    # 3. Calculate Max ZoR
     max_zor = max_chunk_side - (2 * halo)
     
     if max_zor <= 0:
-        # Fallback for extremely low memory
         return patch_size
         
-    # 4. Round down to multiple of PATCH_SIZE (120)
-    # This ensures good alignment with patches
+    # Round to multiple of patch_size
     optimal_zor = (max_zor // patch_size) * patch_size
     
     if optimal_zor < patch_size:
@@ -61,13 +119,14 @@ def calculate_optimal_zor(
         
     return optimal_zor
 
-def resolve_zor(zor_config: Union[int, str], halo: int, patch_size: int = 120) -> int:
+def resolve_zor(zor_config: Union[int, str], halo: int, patch_size: int = 120, **kwargs) -> int:
     """
     Resolves the ZoR size from config, handling "auto" or string inputs.
+    kwargs are passed to calculate_optimal_zor (num_bands, num_classes, stride_ratio).
     """
     if isinstance(zor_config, str) and zor_config.lower() == "auto":
         print("🧠 Auto-calculating Chunk Size based on available RAM...")
-        return calculate_optimal_zor(halo=halo, patch_size=patch_size)
+        return calculate_optimal_zor(halo=halo, patch_size=patch_size, **kwargs)
     elif isinstance(zor_config, int):
         return zor_config
     else:

@@ -94,8 +94,17 @@ We decompose the massive image $\Omega$ into a set of processing chunks $C_k$. E
 The dimensions are related by:
 $$ \text{Chunk}_{dim} = \text{ZoR}_{dim} + 2 \cdot \text{Halo}_{pixels} $$
 
-*   **ZoR Size:** Configurable (e.g., 4000 px). Represents the write-stride.
+*   **ZoR Size:** Dynamically calculated by default (`"auto"`) based on available RAM to maximize throughput without OOM errors.
 *   **Halo Size:** Must be $\ge \frac{ERF}{2}$. For ResNet-50, typical ERF suggests a halo of ~128 pixels is safe.
+
+#### 3.1.1 Memory Auto-Configuration
+The system implements a rigorous memory model to calculate the safe ZoR size. The formula accounts for the different memory footprints of classification vs. segmentation models.
+
+$$ BPP_{total} = BPP_{patches} + BPP_{logits} + BPP_{recon} + BPP_{metrics} + BPP_{io} + 200_{overhead} $$
+
+*   **Patches:** Weighted by the `prefetch_queue_size` and overlap factor.
+*   **Logits:** The largest variable. For **Segmentation**, this is a full 4D map ($N \times C \times P \times P$), consuming significantly more RAM than **Classification** vectors ($N \times C$).
+*   **Metrics:** Buffers for Entropy, Confidence, and Gap are only allocated if enabled in the config.
 
 ### 3.2 Inference Workflow
 
@@ -114,13 +123,13 @@ For each tile coordinate $(r, c)$:
 
 ## 4. Patch-Level Processing & Probabilistic Reconstruction
 
-Ideally, we would feed the entire Chunk (e.g., $4256 \times 4256$) into the GPU. However, VRAM limitations necessitate breaking the Chunk into smaller **Patches** (e.g., $120 \times 120$).
+Ideally, we would feed the entire Chunk (e.g., $4256 \times 4256$) into the GPU. However, VRAM limitations necessitate breaking the Chunk into smaller **Patches**.
 
 ### 4.1 Sliding Window Generation
-*   **Patch Size ($W_p$):** 120.
-*   **Stride ($S_p$):** 60 (50% overlap).
+*   **Patch Size ($W_p$):** Defined by the Model Adapter (e.g., 120 for ResNet, 224 for Prithvi).
+*   **Stride ($S_p$):** Defined by the Model Adapter (typically $W_p / 2$ for 50% overlap).
 
-This dense overlapping ensures that every pixel in the Chunk is predicted by multiple passes of the CNN (typically 4 times for internal pixels).
+This dense overlapping ensures that every pixel in the Chunk is predicted by multiple passes of the CNN.
 
 ### 4.2 Soft-Voting (Sinusoidal Weighting)
 Simple averaging of overlapping patches is suboptimal because CNN predictions are less accurate near the borders of a patch (padding effects). We employ a weighted average where pixels near the center of a patch contribute more.
@@ -165,13 +174,14 @@ To hide I/O latency and CPU-heavy aggregation costs, the pipeline uses `torch.mu
 
 1.  **Main Process (Producer):**
     *   Reads GeoTIFF chunks.
-    *   Applies pre-processing/warping.
+    *   Applies pre-processing/warping (optionally via a **Prefetcher Thread**).
     *   Batches patches to GPU.
     *   Executes Model Forward Pass (`model(x)`).
-    *   Pushes raw probability tensors to `Queue`.
+    *   Pushes raw logits and metadata to `Queue`.
 
 2.  **Writer Process (Consumer):**
-    *   Pulls tensors from `Queue`.
+    *   Pulls raw data from `Queue`.
+    *   Calls `adapter.postprocess()` (e.g., upsampling, argmax).
     *   Performs Sinusoidal Aggregation (CPU intensive).
     *   Calculates Metrics (Entropy, Gap).
     *   Writes to Disk (GeoTIFF compression).
@@ -187,18 +197,24 @@ The entire pipeline is controlled via hierarchical YAML configurations using **H
 ### 7.1 Inference Parameters (`configs/pipeline/inference_params.yaml`)
 | Parameter | Key | Definition |
 | :--- | :--- | :--- |
-| **Zone of Responsibility** | `tiling.zone_of_responsibility_size` | The atomic unit of output writing (e.g., 4000). Controls RAM usage. |
+| **Zone of Responsibility** | `tiling.zone_of_responsibility_size` | Unit of output writing. Can be set to `"auto"` for dynamic RAM optimization. |
 | **Halo** | `tiling.halo_size_pixels` | The context margin (e.g., 128). Must be $\ge$ Half-Receptive-Field. |
-| **Patch Size** | `tiling.patch_size` | CNN input dimension (e.g., 120). |
-| **Stride** | `tiling.patch_stride` | Sliding window step (e.g., 60). |
 | **Batch Size** | `distributed.gpu_batch_size` | Number of patches processed per CUDA call. |
+| **Use Prefetcher** | `distributed.use_prefetcher` | `True`/`False`. Enables background data loading thread. |
+| **Prefetch Queue** | `distributed.prefetch_queue_size` | Size of input buffer (chunks) when prefetcher is active. |
+| **Writer Queue** | `distributed.writer_queue_size` | Size of output buffer (chunks) between Inference and Writer. |
 
 ### 7.2 Model Parameters (`configs/model/*.yaml`)
 | Parameter | Key | Definition |
 | :--- | :--- | :--- |
 | **Target** | `_target_` | Class path for dynamic instantiation (e.g., `ben_v2.model.BigEarthNetv2_0_ImageClassifier`). |
-| **Means** | `means` | List of channel-wise means for normalization. |
-| **Stds** | `stds` | List of channel-wise standard deviations. |
+| **Adapter** | `adapter` | Configuration block for the model adapter (see below). |
+
+### 7.3 Adapter Configuration
+Adapters decouple the pipeline from specific model architectures.
+*   `path`: Python import path to the adapter module.
+*   `class`: Name of the adapter class.
+*   `params`: Dictionary of arguments passed to the adapter's `__init__` (e.g., `bands`, `weights_path`).
 
 ---
 

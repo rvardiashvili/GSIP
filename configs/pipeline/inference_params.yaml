@@ -2,7 +2,7 @@
 pipeline:
   tiling:
     # The exact output dimensions we want per write operation (Zone of Responsibility)
-    zone_of_responsibility_size: 4000 
+    zone_of_responsibility_size: "auto" 
     
     # The context margin. Input size = ZoR + (2 * Halo)
     # Must be >= model effective receptive field / 2. 
@@ -16,8 +16,6 @@ pipeline:
     # Handling image edges
     padding_mode: "reflect"
     
-    # Scalable Processing
-    preferred_chunk_size: 5000
 
   distributed:
     # Options: 'ray', 'dask', 'local'
@@ -30,6 +28,9 @@ pipeline:
     num_gpus_per_worker: 1.0
     gpu_batch_size: 32
     data_loader_workers: 4
+    prefetch_queue_size: 1 # Number of preprocessed chunks to keep in memory for the GPU
+    writer_queue_size: 2 # Size of the queue between Inference and Writer processes
+
     
   output:
     save_confidence: true

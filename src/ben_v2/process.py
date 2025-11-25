@@ -16,115 +16,19 @@ from omegaconf import DictConfig, OmegaConf
 import hydra
 from tqdm import tqdm
 
-# Import new fusion module
-from .fusion import MultiModalInput, DeepLearningRegistrationPipeline
+# Import new inference engine
+from .inference_engine import InferenceEngine
 # Reuse existing utilities where possible
 from .utils import (
-    NEW_LABELS, LABEL_COLOR_MAP, save_color_mask_preview, run_gpu_inference, get_device
+    NEW_LABELS, LABEL_COLOR_MAP, save_color_mask_preview, get_device
 )
-from .data import _read_s2_bands_for_chunk, _read_s1_bands_for_chunk, _find_band_path
+from .data import _find_band_path
 from .generate_viewer import generate_single_node_viewer
 from .memory_utils import resolve_zor
 
 log = logging.getLogger(__name__)
 
-
-class ERFAwareInference:
-    """
-    Handles the Tiling-Error-Free inference using the Overlap-Tile strategy.
-    """
-    def __init__(self, model, zor_size: int, halo_size: int, norm_m: torch.Tensor, norm_s: torch.Tensor, device=None):
-        self.model = model
-        self.zor = zor_size
-        self.halo = halo_size
-        self.input_size = self.zor + (2 * self.halo)
-        self.device = device or get_device()
-        self.fusion_pipeline = DeepLearningRegistrationPipeline() # Placeholder
-        
-        # Ensure norms are on the correct device
-        self.norm_m = norm_m.to(self.device)
-        self.norm_s = norm_s.to(self.device)
-
-    def infer_tile_region(self, tile_folder: Path, r_start: int, c_start: int, cfg: DictConfig) -> Tuple[np.ndarray, List[Tuple[int,int]], int, int]:
-        """
-        Reads padded region, runs inference on patches.
-        Returns:
-            results: (N_patches, N_classes) - raw probabilities from model
-            coords: List of (r, c) patch offsets
-            H_crop: Height of the chunk to be reconstructed
-            W_crop: Width of the chunk to be reconstructed
-        """
-        from .data import cut_into_patches
-        
-        # 1. Define Read Window (ZoR + Halo)
-        r_read = r_start - self.halo
-        c_read = c_start - self.halo
-        w_read = self.input_size
-        h_read = self.input_size
-        
-        # Determine bands to read
-        if 'bands' in cfg.model:
-             bands = list(cfg.model.bands)
-        else:
-             bands = list(cfg.data_source.bands)
-
-        use_s1 = any(b in ['VV', 'VH'] for b in bands)
-
-        # S2 Data
-        s2_bands = [b for b in bands if 'B' in b]
-        s2_data, s2_crs, s2_transform, s2_size = _read_s2_bands_for_chunk(tile_folder, r_read, c_read, w_read, h_read, pad_if_needed=True, bands_list=s2_bands)
-        
-        log.info(f"DEBUG: S2 Data Stats - Shape: {s2_data.shape}, Min: {s2_data.min():.4f}, Max: {s2_data.max():.4f}, Mean: {s2_data.mean():.4f}")
-
-        # S1 Data
-        if use_s1:
-            s1_bands = [b for b in bands if b in ['VV', 'VH']]
-            s1_data, _, _ = _read_s1_bands_for_chunk(
-                tile_folder, r_read, c_read, w_read, h_read, 
-                pad_if_needed=True, 
-                bands_list=s1_bands,
-                ref_crs=s2_crs,
-                ref_transform=s2_transform,
-                ref_size=s2_size
-            )
-            
-            if s1_data.size > 0:
-                log.info(f"DEBUG: S1 Data Stats - Shape: {s1_data.shape}, Min: {s1_data.min():.4f}, Max: {s1_data.max():.4f}, Mean: {s1_data.mean():.4f}")
-                
-                # --- CLIP UPDATE ---
-                # Allow values up to 30.0 dB to capture double-bounce (Urban)
-                s1_data = np.clip(s1_data, -50.0, 30.0) 
-            
-            # CRITICAL FIX: Concatenate S1 FIRST, then S2.
-            # Matches config: ["VV", "VH", "B02", ...]
-            input_data = np.concatenate([s1_data, s2_data], axis=0)
-        else:
-            input_data = s2_data
-
-        # 2. Cut into patches
-        patch_size = cfg.pipeline.tiling.get('patch_size', 120)
-        stride = cfg.pipeline.tiling.get('patch_stride', patch_size // 2)
-        
-        patches, coords, H_crop, W_crop, _ = cut_into_patches(input_data, patch_size, stride=stride)
-        
-        # 3. Run batch inference (on GPU)
-        batch_size = cfg.pipeline.distributed.get('gpu_batch_size', 32)
-        use_amp = True # Default to True if possible
-        
-        results = run_gpu_inference(
-            patches, 
-            self.model, 
-            norm_m=self.norm_m, 
-            norm_s=self.norm_s,
-            device=self.device,
-            batch_size=batch_size,
-            use_amp=use_amp
-        )
-        
-        return results, coords, H_crop, W_crop
-
-
-def writer_process(q: mp.Queue, out_paths: Dict[str, Path], profile_dict: Dict[str, Any], zor: int, halo: int, W_full: int, H_full: int, total_chunks: int, patch_size: int):
+def writer_process(q: mp.Queue, out_paths: Dict[str, Path], profile_dict: Dict[str, Any], zor: int, halo: int, W_full: int, H_full: int, total_chunks: int, patch_size: int, adapter: Any):
     """
     Independent process to reconstruct map, calculate metrics, and write results.
     Receives raw patch probabilities.
@@ -154,19 +58,52 @@ def writer_process(q: mp.Queue, out_paths: Dict[str, Path], profile_dict: Dict[s
             if item is None:
                 break
             
-            r_chunk_start, c_chunk_start, results_t, coords_t, H_crop, W_crop = item
+            # Unpack raw model output and metadata
+            logits_t, metadata = item
             
-            results = results_t.numpy()
-            coords = coords_t 
+            # --- Postprocessing (CPU) ---
+            # Offloaded from Main Process to distribute load
+            # adapter.postprocess expects (tensor, metadata_dict)
+            # And returns dict with 'probs_tensor'
+            post_result = adapter.postprocess((logits_t, metadata))
             
+            results = post_result['probs_tensor'].numpy()
+            coords = post_result['coords']
+            H_crop = post_result['H_crop']
+            W_crop = post_result['W_crop']
+            r_chunk_start = post_result['r_chunk']
+            c_chunk_start = post_result['c_chunk']
+            
+            # Determine N_classes from results shape
+            # Classification: (N, C)
+            # Segmentation: (N, C, H, W)
+            if results.ndim == 2:
+                n_classes = results.shape[1]
+            elif results.ndim == 4:
+                n_classes = results.shape[1]
+            else:
+                # Fallback or error
+                n_classes = 1
+
             # --- Reconstruction (CPU Heavy) ---
-            n_classes = results.shape[1]
             avg_probs = np.zeros((n_classes, H_crop, W_crop), dtype=np.float32)
             weight_sum = np.zeros((1, H_crop, W_crop), dtype=np.float32)
             
             idx = 0
             for r_p, c_p in coords:
-                patch_prob = results[idx][:, np.newaxis, np.newaxis] * patch_weight
+                # Handle diff shapes
+                if results.ndim == 2:
+                    # (C,) -> (C, 1, 1)
+                    patch_data = results[idx][:, np.newaxis, np.newaxis]
+                elif results.ndim == 4:
+                    # (C, H, W)
+                    patch_data = results[idx]
+                else:
+                     continue # Skip weird shapes
+
+                # Multiply by weight (broadcasts automatically)
+                patch_prob = patch_data * patch_weight
+                
                 avg_probs[:, r_p:r_p+patch_size, c_p:c_p+patch_size] += patch_prob
                 weight_sum[:, r_p:r_p+patch_size, c_p:c_p+patch_size] += patch_weight
                 idx += 1
@@ -203,9 +140,18 @@ def writer_process(q: mp.Queue, out_paths: Dict[str, Path], profile_dict: Dict[s
                 gap = None
             
             # --- Write to Disk ---
-            w_width = min(zor, W_full - c_chunk_start)
-            w_height = min(zor, H_full - r_chunk_start)
-            window = Window(c_chunk_start, r_chunk_start, w_width, w_height)
+            # If chunk start is negative (halo), the valid data (ZoR) starts at c_chunk_start + halo
+            valid_c = c_chunk_start + halo
+            valid_r = r_chunk_start + halo
+            
+            w_width = min(zor, W_full - valid_c)
+            w_height = min(zor, H_full - valid_r)
+            
+            # Ensure window is not out of bounds (e.g. last partial chunk)
+            if w_width <= 0 or w_height <= 0:
+                continue
+                
+            window = Window(valid_c, valid_r, w_width, w_height)
             
             if 'class' in dsts: dsts['class'].write(dom[:w_height, :w_width], window=window, indexes=1)
             if 'conf' in dsts: dsts['conf'].write(conf[:w_height, :w_width], window=window, indexes=1)
@@ -224,7 +170,7 @@ def writer_process(q: mp.Queue, out_paths: Dict[str, Path], profile_dict: Dict[s
             dst.close()
 
 
-def main_hydra(cfg: DictConfig, model=None):
+def main_hydra(cfg: DictConfig):
     try:
         ctx = mp.get_context('spawn')
     except ValueError:
@@ -238,47 +184,121 @@ def main_hydra(cfg: DictConfig, model=None):
     log.info(f"Processing tile: {tile_path}")
     log.info(f"Output directory: {output_path}")
     
-    # Setup Model
-    if model is None:
-        model_path_parts = cfg.model.pretrained_model_name_or_path.split('/')
-        model_display_name = model_path_parts[-1] if len(model_path_parts) > 1 else cfg.model.pretrained_model_name_or_path
-        log.info(f"Initializing model: {model_display_name}")
-        model = hydra.utils.instantiate(cfg.model)
-        device = get_device()
-        model.to(device).eval()
-    else:
-        log.info("Using pre-loaded model.")
-        device = get_device() # Ensure device is set correctly even if model pre-loaded (model.device not reliable if on cpu)
-        # Ideally check model.device, but get_device() is safe for new tensors.
-    
     # Get Tile Dimensions
     ref_path = _find_band_path(tile_path, 'B02')
     with rasterio.open(ref_path) as src:
         H_full, W_full = src.shape
         profile = src.profile.copy()
 
-    # Determine Means and Stds for Normalization from the config file
-    if 'means' in cfg.model and 'stds' in cfg.model:
-        means = cfg.model.means
-        stds = cfg.model.stds
-    else:
-        raise ValueError("Model config must contain 'means' and 'stds' for normalization.")
-        
-    log.info(f"Using fixed normalization MEANS: {means}")
-    log.info(f"Using fixed normalization STDS: {stds}")
+    # Determine Means and Stds for Normalization if available (legacy/fallback support)
+    means = cfg.model.get('means')
+    stds = cfg.model.get('stds')
 
-    norm_m = torch.tensor(means, dtype=torch.float32).view(1, len(means), 1, 1)
-    norm_s = torch.tensor(stds, dtype=torch.float32).view(1, len(stds), 1, 1)
+    # --- 1. Instantiate Adapter First (Dependency Injection) ---
+    # This allows us to query the adapter for its requirements (bands, classes, patch_size)
+    # BEFORE we calculate memory usage and tiling.
     
-    # Setup Inference Engine
+    from importlib import import_module
+    
+    if 'adapter' in cfg.model:
+        log.info("Using adapter configuration from model config.")
+        adapter_cfg = OmegaConf.to_container(cfg.model.adapter, resolve=True)
+        
+        # Inject pipeline defaults if missing in adapter params
+        if 'params' not in adapter_cfg:
+            adapter_cfg['params'] = {}
+            
+        # Use pipeline defaults if not set in adapter
+        # Note: The adapter might have its own hard defaults if these are None
+        if 'patch_size' not in adapter_cfg['params']:
+             adapter_cfg['params']['patch_size'] = cfg.pipeline.tiling.get('patch_size', 120)
+             
+        if 'stride' not in adapter_cfg['params']:
+             adapter_cfg['params']['stride'] = cfg.pipeline.tiling.get('patch_stride', 60)
+
+    else:
+        # Legacy / Default behavior for BigEarthNet
+        if means is None or stds is None:
+            raise ValueError("Model config must contain 'means' and 'stds' for normalization if no explicit adapter is defined.")
+            
+        log.info(f"Using fixed normalization MEANS: {means}")
+        log.info(f"Using fixed normalization STDS: {stds}")
+        
+        adapter_params = {
+            'model_config': OmegaConf.to_container(cfg.model, resolve=True),
+            'means': means,
+            'stds': stds,
+            'patch_size': cfg.pipeline.tiling.get('patch_size', 120),
+            'stride': cfg.pipeline.tiling.get('patch_stride', 60),
+            'gpu_batch_size': cfg.pipeline.distributed.get('gpu_batch_size', 32),
+            'device': 'cuda' if torch.cuda.is_available() else 'cpu'
+        }
+        
+        adapter_cfg = {
+            'path': 'ben_v2.adapters.bigearthnet_adapter',
+            'class': 'BigEarthNetAdapter',
+            'params': adapter_params
+        }
+
+    # Instantiate the Adapter Class
+    try:
+        module_path = adapter_cfg['path']
+        class_name = adapter_cfg['class']
+        module = import_module(module_path)
+        adapter_class = getattr(module, class_name)
+        adapter = adapter_class(adapter_cfg['params'])
+    except (ImportError, AttributeError) as e:
+        raise ImportError(f"Could not load adapter '{class_name}' from '{module_path}': {e}")
+
+    # --- 2. Dynamic Configuration based on Adapter ---
+    patch_size = adapter.patch_size
+    stride = adapter.stride
+    num_classes = adapter.num_classes
+    num_bands = adapter.num_bands
+    
+    stride_ratio = stride / patch_size if patch_size > 0 else 0.5
+    
+    # Setup Inference Engine Config Dynamically
     zor_config = cfg.pipeline.tiling.zone_of_responsibility_size
     halo = cfg.pipeline.tiling.halo_size_pixels
-    patch_size = cfg.pipeline.tiling.get('patch_size', 120)
-    
-    zor = resolve_zor(zor_config, halo, patch_size=patch_size)
+
+    # Determine concurrent chunks for memory safety
+    use_prefetcher = cfg.model.get('use_prefetcher', cfg.pipeline.distributed.get('use_prefetcher', True))
+    if use_prefetcher:
+        pq_size = cfg.pipeline.distributed.get('prefetch_queue_size', 2)
+    else:
+        pq_size = 0
+
+    writer_q_size = cfg.pipeline.distributed.get('writer_queue_size', 4)
+
+    # Calculate ZoR using the model-specific parameters
+    zor = resolve_zor(
+        zor_config, 
+        halo, 
+        patch_size=patch_size, 
+        num_bands=num_bands, 
+        num_classes=num_classes, 
+        stride_ratio=stride_ratio,
+        prefetch_queue_size=pq_size,
+        writer_queue_size=writer_q_size,
+        is_segmentation=adapter.is_segmentation,
+        save_conf=cfg.pipeline.output.get('save_confidence', True),
+        save_entr=cfg.pipeline.output.get('save_entropy', True),
+        save_gap=cfg.pipeline.output.get('save_gap', True)
+    )
     log.info(f"Inference Configuration: ZoR={zor}, Halo={halo}, ChunkSize={zor + 2*halo}")
-    
-    erf_engine = ERFAwareInference(model, zor, halo, norm_m, norm_s, device)
+    log.info(f"Model Params: Patch={patch_size}, Stride={stride}, Bands={num_bands}, Classes={num_classes}")
+    log.info(f"Memory Logic: Prefetch Q={pq_size}, Writer Q={writer_q_size}, Segmentation={adapter.is_segmentation}")
+
+    # Prepare bands list
+    if 'bands' in adapter.params:
+         bands = list(adapter.params['bands'])
+    else:
+         bands = list(cfg.data_source.bands)
+
+    # Instantiate Inference Engine with the pre-built adapter
+    engine_config = {'adapter': adapter_cfg} # Still pass config for reference if needed
+    engine = InferenceEngine(engine_config, adapter=adapter)
 
     # Prepare Output Profiles
     profile.update(
@@ -308,40 +328,116 @@ def main_hydra(cfg: DictConfig, model=None):
     total_chunks = len(coords_list)
 
     # --- Initialize Writer Process ---
-    write_queue = ctx.Queue(maxsize=4) 
+    # Increase maxsize to decouple Inference (Fast) from Writing (Slow)
+    writer_queue_size = cfg.pipeline.distributed.get('writer_queue_size', 4)
+    write_queue = ctx.Queue(maxsize=writer_queue_size) 
     
     writer_p = ctx.Process(
         target=writer_process,
-        args=(write_queue, out_paths, profile, zor, halo, W_full, H_full, total_chunks, patch_size),
+        args=(write_queue, out_paths, profile, zor, halo, W_full, H_full, total_chunks, patch_size, engine.adapter),
         daemon=True
     )
     writer_p.start()
 
-    # Distributed Execution Branch
-    if cfg.pipeline.distributed.engine == 'ray':
-        log.error("Ray distributed mode not yet updated for decoupled writer.")
-        pass
+    log.info("Starting Inference Loop (InferenceEngine)")
     
-    log.info("Starting Inference Loop (ERF-Aware)")
-    
+    # --- Initialize Input Stream ---
+    def input_stream_generator():
+        for r, c in coords_list:
+            r_read = r - halo
+            c_read = c - halo
+            w_read = zor + (2 * halo)
+            h_read = zor + (2 * halo)
+            
+            raw_input = {
+                'tile_folder': tile_path,
+                'r_start': r_read,
+                'c_start': c_read,
+                'w_read': w_read,
+                'h_read': h_read,
+                'bands': bands
+            }
+            
+            # Run CPU-bound preprocessing
+            try:
+                yield engine.preprocess(raw_input)
+            except Exception as e:
+                log.error(f"Preprocessing error at {r}, {c}: {e}")
+                raise e
+
+    if use_prefetcher:
+        # Use a thread queue to buffer preprocessed inputs
+        prefetch_queue_size = cfg.pipeline.distributed.get('prefetch_queue_size', 3)
+        prefetch_queue = queue.Queue(maxsize=prefetch_queue_size)
+        
+        def prefetch_worker():
+            try:
+                for item in input_stream_generator():
+                    prefetch_queue.put(item)
+                prefetch_queue.put(None) # End of data
+            except Exception as e:
+                log.error(f"Prefetch error: {e}")
+                prefetch_queue.put(None) # Signal error or end
+
+        import threading
+        loader_thread = threading.Thread(target=prefetch_worker, daemon=True)
+        loader_thread.start()
+        
+        def get_next_batch():
+            return prefetch_queue.get()
+    else:
+        # Synchronous execution
+        stream_iter = input_stream_generator()
+        def get_next_batch():
+            try:
+                return next(stream_iter)
+            except StopIteration:
+                return None
+            except Exception as e:
+                log.error(f"Synchronous error: {e}")
+                return None
+
     inference_pbar = tqdm(total=total_chunks, desc="Inference", position=0, leave=True)
     
     try:
-        for r, c in coords_list:
-            # 1. Read -> Cut -> Infer (GPU)
-            results, coords, H_crop, W_crop = erf_engine.infer_tile_region(tile_path, r, c, cfg)
+        while True:
+            # Check writer status
+            if not writer_p.is_alive():
+                log.error(f"Writer process died unexpectedly with exit code {writer_p.exitcode}. Stopping.")
+                break
+
+            # Get next batch
+            model_input = get_next_batch()
+            if model_input is None:
+                break # Done or Error # Done or Error
             
-            # 2. Pass to Writer (CPU)
-            results_t = torch.from_numpy(results).share_memory_()
+            # 2. Predict (GPU) - RAW Output (logits, metadata)
+            logits_t, metadata = engine.predict_raw(model_input)
             
-            write_queue.put((r, c, results_t, coords, H_crop, W_crop))
+            # 3. Pass to Writer (CPU)
+            # We pass the raw logits and the metadata. 
+            # Postprocessing happens in the writer process.
+            
+            logits_t = logits_t.share_memory_()
+            
+            # Put in queue (this might block if queue is full, indicating writer is slow)
+            write_queue.put((logits_t, metadata))
             
             inference_pbar.update(1)
 
+    except KeyboardInterrupt:
+        log.info("Interrupted by user.")
+        write_queue.put(None)
+        writer_p.terminate()
+        
     finally:
         inference_pbar.close()
-        write_queue.put(None)
-        writer_p.join()
+        if writer_p.is_alive():
+            write_queue.put(None)
+            writer_p.join()
+        
+        if writer_p.exitcode is not None and writer_p.exitcode != 0:
+            log.error(f"Writer process exited with error code {writer_p.exitcode}. Output files may be incomplete.")
 
     # Metadata
     class_map = {label: {"index": i, "color": c.tolist()} for i, (label, c) in enumerate(zip(NEW_LABELS, LABEL_COLOR_MAP.values()))}
@@ -350,10 +446,16 @@ def main_hydra(cfg: DictConfig, model=None):
 
     save_preview = cfg.pipeline.output.get('save_preview', True)
     if save_preview:
-        downscale = cfg.pipeline.output.get("preview_downscale_factor", 10)
-        class_path = out_paths['class']
-        with rasterio.open(class_path) as src:
-            save_color_mask_preview(src.read(1), output_path / "preview.png", save_preview=save_preview, downscale_factor=downscale)
+        try:
+            downscale = cfg.pipeline.output.get("preview_downscale_factor", 10)
+            class_path = out_paths['class']
+            if class_path.exists():
+                with rasterio.open(class_path) as src:
+                    save_color_mask_preview(src.read(1), output_path / "preview.png", save_preview=save_preview, downscale_factor=downscale)
+            else:
+                log.warning(f"Class map file not found at {class_path}. Skipping preview generation.")
+        except Exception as e:
+            log.error(f"Failed to generate preview: {e}")
 
     try:
         generate_single_node_viewer(tile_path.name, str(output_path.parent))
