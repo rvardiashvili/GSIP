@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ben_v2"
+name = "geospatial-inference-pipeline"
 version = "0.1.0"
-description = "A scalable pipeline for BigEarthNet v2.0 analysis."
+description = "A scalable, multi-modal deep learning pipeline for robust and efficient inference on gigapixel-scale Earth Observation (EO) data, focusing on tasks like land cover classification and segmentation."
 authors = [{name = "Your Name", email = "you@example.com"}]
 license = {file = "LICENSE"}
 classifiers = [
@@ -14,12 +14,29 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "pandas",
+    "numpy",
+    "torch",
+    "rasterio",
+    "tqdm",
+    "lightning",
+    "huggingface_hub",
+    "matplotlib",
+    "Pillow",
+    "scipy",
+    "configilm",
+    "hydra-core",
+    "ray",
+    "omegaconf",
+    "transformers",
+    "lmdb",
     "psutil",
+    "pandas",
+    "safetensors",
+    "timm",
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/your-username/BigEarthNetv2.0"
+"Homepage" = "https://github.com/rvardiashvili/GeoTiff-Scalable-Analysis-Pipeline"
 
 [tool.setuptools.packages.find]
 where = ["src"]

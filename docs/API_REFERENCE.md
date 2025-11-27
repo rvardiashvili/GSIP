@@ -64,6 +64,22 @@ This document details the key functions and classes in the codebase, explaining 
         *   Calls `engine.predict_raw()`.
         *   Pushes results to the writer queue.
 
+### `resolve_zor(tiling_config: DictConfig, adapter: BaseAdapter, input_properties: Dict[str, Any], available_ram_gb: float) -> int`
+**Reason:** Determines the optimal Zone of Responsibility (ZoR) size in pixels for a given input based on available system RAM and model/pipeline parameters. This ensures efficient processing of large images without exceeding CPU memory limits.
+
+**Key Parameters:**
+*   `tiling_config`: Configuration specific to tiling parameters, including `zone_of_responsibility_size` (which can be "auto").
+*   `adapter`: The initialized model adapter, providing model-specific properties (`is_segmentation`, `num_classes`, `num_bands`, `patch_size`, `stride`).
+*   `input_properties`: Dictionary containing properties of the input image, such as its data type.
+*   `available_ram_gb`: The amount of system RAM (in GB) available for the process.
+
+**Logic:**
+1.  If `tiling_config.zone_of_responsibility_size` is explicitly set (not "auto"), it uses that value.
+2.  If set to "auto", it calls `calculate_optimal_zor` from `src/eo_core/memory_utils.py`, passing detailed memory model parameters derived from the adapter and input properties.
+3.  The result from `calculate_optimal_zor` is then adjusted (e.g., rounded down to a multiple of a certain value) to ensure practical tiling.
+
+**Output:** An integer representing the optimal ZoR size in pixels.
+
 ---
 
 ## `src/eo_core/memory_utils.py`
@@ -93,6 +109,25 @@ This document details the key functions and classes in the codebase, explaining 
     $$ BPP_{io} \approx 4 \cdot N_{bands} $$
 
 **Total Footprint:** $$ BPP_{total} = BPP_{patches} + BPP_{logits} + BPP_{recon} + BPP_{metrics} + BPP_{io} + 200_{overhead} $$
+
+### `estimate_optimal_batch_size(model: torch.nn.Module, input_shape: Tuple[int, ...], dtype: torch.dtype, max_batch_size: int = 128, min_batch_size: int = 1, device: str = "cuda") -> int`
+**Reason:** Provides a heuristic to determine an optimal GPU batch size by measuring memory consumption for small batches. This helps in maximizing GPU utilization without encountering Out-Of-Memory (OOM) errors.
+
+**Key Parameters:**
+*   `model`: The PyTorch model for which to estimate batch size.
+*   `input_shape`: A tuple representing the shape of a single input to the model (excluding the batch dimension), e.g., `(num_bands, patch_height, patch_width)`.
+*   `dtype`: The data type of the input tensor (e.g., `torch.float32`).
+*   `max_batch_size`: The upper limit for the batch size search.
+*   `min_batch_size`: The lower limit for the batch size search.
+*   `device`: The device on which the model will run (e.g., "cuda").
+
+**Logic:** The function iteratively attempts to run a forward pass with increasing batch sizes. It catches CUDA OOM errors to identify the maximum sustainable batch size. This process involves:
+1.  Initializing a small batch size.
+2.  Attempting a forward pass with dummy data.
+3.  If successful, increasing the batch size; if it fails due to OOM, reducing the batch size.
+4.  Refining the search using a binary search-like approach or linear scan until an optimal batch size is found or limits are reached.
+
+**Output:** An integer representing the estimated optimal GPU batch size.
 
 ---
 
@@ -166,6 +201,41 @@ This document details the key functions and classes in the codebase, explaining 
     1.  Creates a Virtual Raster (VRT) to reproject S1 to S2 CRS on the fly.
     2.  Reads the requested window.
     3.  Converts Amplitude to dB (`20 * log10(A) - 50`).
+
+### `_find_band_path(tile_path: Path, band_name: str) -> Path`
+**Reason:** Locates the specific band file within a Sentinel-2 tile directory structure. This function abstracts away the complex file organization of `.SAFE` archives.
+*   **Input:**
+    *   `tile_path`: Path to the root of the Sentinel `.SAFE` directory (e.g., `S2A_MSIL2A_20230101T100000_N0500_R022_T31TGM_20230101T100000.SAFE`).
+    *   `band_name`: The name of the band to find (e.g., 'B02', 'B8A', 'TCI').
+*   **Logic:** Searches for the band file based on common naming conventions and directory structures typical for Sentinel-2 L2A data within the provided `tile_path`. It specifically looks for `.jp2` files matching the band name.
+*   **Output:** `pathlib.Path` object pointing to the found band file.
+
+### `read_chunk_data(chunk_info: Dict[str, Any], s2_reader: Callable, s1_reader: Optional[Callable] = None, s1_config: Optional[Dict[str, Any]] = None) -> np.ndarray`
+**Reason:** A wrapper function designed to combine Sentinel-2 and, optionally, Sentinel-1 data for a given processing chunk. It orchestrates the reading and alignment of multi-sensor data into a unified tensor.
+*   **Input:**
+    *   `chunk_info`: A dictionary containing metadata and parameters for the current chunk (e.g., coordinates, tile paths).
+    *   `s2_reader`: A callable function (typically `_read_s2_bands_for_chunk`) to read Sentinel-2 data.
+    *   `s1_reader`: An optional callable function (typically `_read_s1_bands_for_chunk`) to read Sentinel-1 data.
+    *   `s1_config`: Optional dictionary with Sentinel-1 specific configuration.
+*   **Logic:**
+    1.  Invokes `s2_reader` to get the Sentinel-2 data for the chunk.
+    2.  If `s1_reader` is provided, it's called to get Sentinel-1 data, which is then aligned spatially to the Sentinel-2 data.
+    3.  The S1 and S2 data are stacked along the band dimension.
+*   **Output:** A NumPy array (`np.ndarray`) containing the stacked and aligned input bands for the chunk.
+
+### `cut_into_patches(chunk_data: np.ndarray, patch_size: int, stride: int) -> Tuple[np.ndarray, List[Dict[str, Any]]]`
+**Reason:** Divides a large image chunk into smaller, overlapping patches that are suitable as input for neural network models, which typically expect fixed-size inputs.
+*   **Input:**
+    *   `chunk_data`: A 3D NumPy array representing the `(bands, height, width)` of the image chunk.
+    *   `patch_size`: The desired height and width of each square patch.
+    *   `stride`: The step size (in pixels) for the sliding window, determining the overlap between patches.
+*   **Logic:**
+    1.  Implements a sliding window approach across the `chunk_data`.
+    2.  Extracts individual patches, ensuring that patches near the chunk boundaries are handled correctly (e.g., through implicit padding or partial patches).
+    3.  Collects metadata for each patch, such as its original coordinates within the chunk.
+*   **Output:** A tuple containing:
+    *   A 4D NumPy array (`np.ndarray`) of shape `(num_patches, bands, patch_size, patch_size)`.
+    *   A list of dictionaries, where each dictionary contains metadata (e.g., `x_offset`, `y_offset`) for the corresponding patch.
 
 ---
 
