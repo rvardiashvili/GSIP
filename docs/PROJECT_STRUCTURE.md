@@ -21,6 +21,7 @@ This document outlines the directory layout and purpose of key files in the **Ge
 │   ├── requirements.txt      # Python dependencies
 │   └── eo_core/              # Core Package Code (GeoSpatial Inference Pipeline logic)
 │       ├── adapters/         # Model Adapters (Interface for various ML models)
+│       ├── reporters/        # Output Reporters (Plug-and-play output generation)
 │       ├── data.py           # Data I/O and preprocessing utilities
 │       ├── inference_engine.py # Core logic for model inference
 │       ├── memory_utils.py   # Utilities for dynamic memory management
@@ -42,5 +43,6 @@ This document outlines the directory layout and purpose of key files in the **Ge
 
 *   **`configs/`**: Controls every aspect of the pipeline without changing code. Models, batch sizes, and file paths are defined here.
 *   **`docs/`**: Contains all detailed documentation for the project.
-*   **`src/eo_core/adapters/`**: The "plug-and-play" layer. If you want to add a new model type (e.g., a YOLO detector or a specific segmentation net), you write a new Adapter here without touching the core pipeline logic.
+*   **`src/eo_core/adapters/`**: The "plug-and-play" layer for Models. If you want to add a new model type (e.g., a YOLO detector or a specific segmentation net), you write a new Adapter here without touching the core pipeline logic.
+*   **`src/eo_core/reporters/`**: The "plug-and-play" layer for Outputs. If you want to generate a new type of output file (e.g., Zarr, COG, JSON stats), you write a new Reporter here and add it to the configuration.
 *   **`src/eo_core/`**: Contains the heavy lifting logic. `process.py` is the orchestrator, managing the multiprocessing and tiling logic described in `docs/TECHNICAL_REFERENCE.md`.

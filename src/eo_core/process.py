@@ -12,7 +12,7 @@ from pathlib import Path
 from rasterio.windows import Window
 from rasterio.enums import Resampling
 from typing import Tuple, List, Optional, Dict, Any
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf, ListConfig
 import hydra
 from tqdm import tqdm
 
@@ -28,41 +28,71 @@ from .memory_utils import resolve_zor
 
 log = logging.getLogger(__name__)
 
-def writer_process(q: mp.Queue, out_paths: Dict[str, Path], profile_dict: Dict[str, Any], zor: int, halo: int, W_full: int, H_full: int, total_chunks: int, patch_size: int, adapter: Any):
+# from .reporters import GeoTIFFReporter, PreviewReporter, MetadataReporter
+
+from importlib import import_module
+
+def writer_process(q: mp.Queue, context_config: Dict[str, Any], zor: int, halo: int, W_full: int, H_full: int, total_chunks: int, patch_size: int, adapter: Any, reporter_configs: Any):
     """
-    Independent process to reconstruct map, calculate metrics, and write results.
-    Receives raw patch probabilities.
+    Independent process to reconstruct map and delegate writing to Reporters.
     """
+    # Ensure src is in path for subprocesses
+    src_path = str(Path(__file__).parent.parent)
+    if src_path not in sys.path:
+        sys.path.append(src_path)
+        
     t_process_start = time.perf_counter()
+    
+    # Instantiate Reporters via Hydra
+    reporters = []
+    
+    # Normalize input to list of configs
+    configs_to_process = []
+    if isinstance(reporter_configs, (dict, DictConfig)):
+        configs_to_process = list(reporter_configs.values())
+    elif isinstance(reporter_configs, (list, ListConfig)):
+        configs_to_process = reporter_configs
+    
+    log.info(f"Writer Process started. Configured reporters: {len(configs_to_process)}")
+        
+    for r_conf in configs_to_process:
+        if r_conf is None: 
+            continue
+        try:
+            # hydra.utils.instantiate creates the object based on _target_
+            reporter = hydra.utils.instantiate(r_conf)
+            reporters.append(reporter)
+            log.info(f"Initialized reporter: {reporter.__class__.__name__}")
+        except Exception as e:
+            log.error(f"Failed to instantiate reporter config {r_conf}: {e}")
+
+    # Construct Full Context
+    # We reconstruct the context object from the config passed
+    context = {
+        'output_path': Path(context_config['output_path']),
+        'tile_name': context_config['tile_name'],
+        'profile': context_config['profile'],
+        'adapter': adapter,
+        'config': context_config['hydra_config'],
+        'H_full': H_full,
+        'W_full': W_full
+    }
+    
+    # 1. Start Reporters
+    for r in reporters:
+        try:
+            r.on_start(context)
+        except Exception as e:
+            log.error(f"Error in {r.__class__.__name__}.on_start: {e}")
+
     # Pre-calculate sinusoidal window for reconstruction
     window_1d = np.sin(np.linspace(0, np.pi, patch_size))**2
     patch_weight = np.outer(window_1d, window_1d).astype(np.float32)
     patch_weight = patch_weight[np.newaxis, :, :] # (1, P, P)
     
-    # Open files
-    dsts = {}
     pbar = tqdm(total=total_chunks, desc="Writing  ", position=1, leave=True)
     
     try:
-        for key, path in out_paths.items():
-            if path:
-                p = profile_dict.copy()
-                if key == 'class':
-                    p.update(dtype='uint8', nodata=255)
-                else:
-                    p.update(dtype='float32', nodata=None)
-                
-                # Explicitly delete existing file to prevent rasterio/GDAL errors
-                # when overwriting potentially corrupted/empty files
-                if path.exists():
-                    try:
-                        path.unlink()
-                    except OSError as e:
-                        log.warning(f"Could not delete existing file {path}: {e}")
-
-                Path(path).parent.mkdir(parents=True, exist_ok=True)
-                dsts[key] = rasterio.open(path, 'w', **p)
-
         while True:
             item = q.get()
             if item is None:
@@ -72,12 +102,8 @@ def writer_process(q: mp.Queue, out_paths: Dict[str, Path], profile_dict: Dict[s
             logits_t, metadata = item
             
             # --- Postprocessing (CPU) ---
-            # Offloaded from Main Process to distribute load
-            # adapter.postprocess expects (tensor, metadata_dict)
-            # And returns dict with 'probs_tensor'
             t_postprocess_start = time.perf_counter()
             post_result = adapter.postprocess((logits_t, metadata))
-            log.debug(f"[{time.perf_counter()-t_postprocess_start:.4f}s] Writer: adapter.postprocess")
             
             results = post_result['probs_tensor'].numpy()
             coords = post_result['coords']
@@ -86,35 +112,27 @@ def writer_process(q: mp.Queue, out_paths: Dict[str, Path], profile_dict: Dict[s
             r_chunk_start = post_result['r_chunk']
             c_chunk_start = post_result['c_chunk']
             
-            # Determine N_classes from results shape
-            # Classification: (N, C)
-            # Segmentation: (N, C, H, W)
             if results.ndim == 2:
                 n_classes = results.shape[1]
             elif results.ndim == 4:
                 n_classes = results.shape[1]
             else:
-                # Fallback or error
                 n_classes = 1
 
             # --- Reconstruction (CPU Heavy) ---
-            t_reconstruction_start = time.perf_counter()
+            # t_reconstruction_start = time.perf_counter()
             avg_probs = np.zeros((n_classes, H_crop, W_crop), dtype=np.float32)
             weight_sum = np.zeros((1, H_crop, W_crop), dtype=np.float32)
             
             idx = 0
             for r_p, c_p in coords:
-                # Handle diff shapes
                 if results.ndim == 2:
-                    # (C,) -> (C, 1, 1)
                     patch_data = results[idx][:, np.newaxis, np.newaxis]
                 elif results.ndim == 4:
-                    # (C, H, W)
                     patch_data = results[idx]
                 else:
-                     continue # Skip weird shapes
+                     continue 
 
-                # Multiply by weight (broadcasts automatically)
                 patch_prob = patch_data * patch_weight
                 
                 avg_probs[:, r_p:r_p+patch_size, c_p:c_p+patch_size] += patch_prob
@@ -123,7 +141,6 @@ def writer_process(q: mp.Queue, out_paths: Dict[str, Path], profile_dict: Dict[s
                 
             weight_sum[weight_sum == 0] = 1.0
             probs_map = avg_probs / weight_sum
-            log.debug(f"[{time.perf_counter()-t_reconstruction_start:.4f}s] Writer: Reconstruction")
 
             # --- Crop Center (ZoR) ---
             if probs_map.ndim == 3:
@@ -132,38 +149,9 @@ def writer_process(q: mp.Queue, out_paths: Dict[str, Path], profile_dict: Dict[s
                 end_y, end_x = h - halo, w - halo
                 valid_probs = probs_map[:, start_y:end_y, start_x:end_x]
             else:
-                 pass
+                 valid_probs = probs_map
 
-            # --- Metrics Calculation (CPU Heavy) ---
-            dom = np.argmax(valid_probs, axis=0).astype(np.uint8)
-            
-            if 'conf' in dsts:
-                conf = np.max(valid_probs, axis=0).astype(np.float32)
-            else:
-                conf = None
-                
-            if 'entr' in dsts:
-                entr = -np.sum(valid_probs * np.log(np.clip(valid_probs, 1e-6, 1.0)), axis=0).astype(np.float32)
-            else:
-                entr = None
-                
-            if 'gap' in dsts:
-                top2 = np.partition(valid_probs, -2, axis=0)[-2:]
-                gap = (top2[1] - top2[0]).astype(np.float32)
-            else:
-                gap = None
-                
-            if 'gradient' in dsts:
-                # For binary, save Class 1 probability
-                if n_classes == 2:
-                    gradient = valid_probs[1].astype(np.float32)
-                else:
-                    # Fallback/Undefined for multi-class (could be maxprob?)
-                    gradient = None
-            else:
-                gradient = None
-            
-            # --- Write to Disk ---
+            # --- Delegate to Reporters ---
             # If chunk start is negative (halo), the valid data (ZoR) starts at c_chunk_start + halo
             valid_c = c_chunk_start + halo
             valid_r = r_chunk_start + halo
@@ -171,17 +159,23 @@ def writer_process(q: mp.Queue, out_paths: Dict[str, Path], profile_dict: Dict[s
             w_width = min(zor, W_full - valid_c)
             w_height = min(zor, H_full - valid_r)
             
-            # Ensure window is not out of bounds (e.g. last partial chunk)
+            # Ensure window is not out of bounds
             if w_width <= 0 or w_height <= 0:
                 continue
                 
             window = Window(valid_c, valid_r, w_width, w_height)
             
-            if 'class' in dsts: dsts['class'].write(dom[:w_height, :w_width], window=window, indexes=1)
-            if 'conf' in dsts: dsts['conf'].write(conf[:w_height, :w_width], window=window, indexes=1)
-            if 'entr' in dsts and entr is not None: dsts['entr'].write(entr[:w_height, :w_width], window=window, indexes=1)
-            if 'gap' in dsts and gap is not None: dsts['gap'].write(gap[:w_height, :w_width], window=window, indexes=1)
-            if 'gradient' in dsts and gradient is not None: dsts['gradient'].write(gradient[:w_height, :w_width], window=window, indexes=1)
+            chunk_data = {
+                'valid_probs': valid_probs, # (C, H_zor, W_zor)
+                'window': window,
+                'coords': (valid_r, valid_c)
+            }
+            
+            for r in reporters:
+                try:
+                    r.on_chunk(chunk_data)
+                except Exception as e:
+                    log.error(f"Error in {r.__class__.__name__}.on_chunk: {e}")
             
             pbar.update(1)
 
@@ -191,8 +185,13 @@ def writer_process(q: mp.Queue, out_paths: Dict[str, Path], profile_dict: Dict[s
         traceback.print_exc()
     finally:
         pbar.close()
-        for dst in dsts.values():
-            dst.close()
+        # 3. Finish Reporters
+        for r in reporters:
+            try:
+                r.on_finish(context)
+            except Exception as e:
+                log.error(f"Error in {r.__class__.__name__}.on_finish: {e}")
+                
     log.info(f"Writer process finished in {time.perf_counter() - t_process_start:.2f}s")
 
 
@@ -345,20 +344,26 @@ def main_hydra(cfg: DictConfig):
         blockysize=256
     )
     
-    # Prepare Paths for Writer
-    out_paths = {
-        'class': output_path / f"{tile_path.name}_class.tif",
-        'conf': output_path / f"{tile_path.name}_maxprob.tif",
-    }
+    # Reporter Configuration
+    if 'reporters' in cfg.pipeline and cfg.pipeline.reporters:
+        log.info("Loading reporters from configuration.")
+        # Pass the DictConfig/ListConfig directly, no need to resolve to container yet
+        # as hydra.utils.instantiate expects OmegaConf objects or dicts.
+        reporter_configs = cfg.pipeline.reporters
+    else:
+        log.info("Using default reporters (GeoTIFF, Preview, Metadata).")
+        reporter_configs = {
+            'geotiff': {'_target_': 'eo_core.reporters.geotiff.GeoTIFFReporter'},
+            'preview': {'_target_': 'eo_core.reporters.preview.PreviewReporter'},
+            'metadata': {'_target_': 'eo_core.reporters.metadata.MetadataReporter'}
+        }
     
-    # Gradient Preview: Saves Class 1 probability for binary models (visualizes detection confidence)
-    if cfg.pipeline.output.get('save_gradient_preview', False) and num_classes == 2:
-        out_paths['gradient'] = output_path / f"{tile_path.name}_gradient.tif"
-        
-    if cfg.pipeline.output.save_entropy:
-        out_paths['entr'] = output_path / f"{tile_path.name}_entropy.tif"
-    if cfg.pipeline.output.save_gap:
-        out_paths['gap'] = output_path / f"{tile_path.name}_gap.tif"
+    context_config = {
+        'output_path': output_path,
+        'tile_name': tile_path.name,
+        'profile': profile,
+        'hydra_config': OmegaConf.to_container(cfg, resolve=True)
+    }
 
     # Calculate Total Chunks
     coords_list = []
@@ -374,12 +379,30 @@ def main_hydra(cfg: DictConfig):
     
     writer_p = ctx.Process(
         target=writer_process,
-        args=(write_queue, out_paths, profile, zor, halo, W_full, H_full, total_chunks, patch_size, engine.adapter),
+        args=(write_queue, context_config, zor, halo, W_full, H_full, total_chunks, patch_size, engine.adapter, reporter_configs),
         daemon=True
     )
     writer_p.start()
 
     log.info("Starting Inference Loop (InferenceEngine)")
+    
+    # --- Benchmarker Initialization ---
+    from .benchmarker import Benchmarker
+    benchmarker = Benchmarker(output_dir=output_path)
+    
+    # Record Model Config
+    bench_config = {
+        "adapter_class": adapter_cfg.get('class', 'Unknown'),
+        "patch_size": patch_size,
+        "stride": stride,
+        "zor": zor,
+        "halo": halo,
+        "gpu_batch_size": adapter.gpu_batch_size if hasattr(adapter, 'gpu_batch_size') else 'unknown',
+        "prefetch_queue_size": pq_size,
+        "writer_queue_size": writer_queue_size
+    }
+    benchmarker.set_model_config(bench_config)
+    benchmarker.start()
     
     # --- Initialize Input Stream ---
     def input_stream_generator():
@@ -402,7 +425,9 @@ def main_hydra(cfg: DictConfig):
             t_preprocess_start = time.perf_counter()
             try:
                 processed_input = engine.preprocess(raw_input)
-                log.debug(f"[{time.perf_counter()-t_preprocess_start:.4f}s] Main: engine.preprocess for chunk ({r},{c})")
+                dur_prep = time.perf_counter() - t_preprocess_start
+                log.debug(f"[{dur_prep:.4f}s] Main: engine.preprocess for chunk ({r},{c})")
+                benchmarker.record_event('cpu_preprocess_duration', dur_prep)
                 yield processed_input
             except Exception as e:
                 log.error(f"Preprocessing error at {r}, {c}: {e}")
@@ -427,7 +452,10 @@ def main_hydra(cfg: DictConfig):
         loader_thread.start()
         
         def get_next_batch():
-            return prefetch_queue.get()
+            t_wait = time.perf_counter()
+            item = prefetch_queue.get()
+            benchmarker.record_event('wait_for_prefetch_duration', time.perf_counter() - t_wait)
+            return item
     else:
         # Synchronous execution
         stream_iter = input_stream_generator()
@@ -457,7 +485,9 @@ def main_hydra(cfg: DictConfig):
             # 2. Predict (GPU) - RAW Output (logits, metadata)
             t_predict_raw_start = time.perf_counter()
             logits_t, metadata = engine.predict_raw(model_input)
-            log.debug(f"[{time.perf_counter()-t_predict_raw_start:.4f}s] Main: engine.predict_raw")
+            dur_pred = time.perf_counter() - t_predict_raw_start
+            log.debug(f"[{dur_pred:.4f}s] Main: engine.predict_raw")
+            benchmarker.record_event('gpu_inference_duration', dur_pred)
             
             # 3. Pass to Writer (CPU)
             # We pass the raw logits and the metadata. 
@@ -466,7 +496,9 @@ def main_hydra(cfg: DictConfig):
             logits_t = logits_t.share_memory_()
             
             # Put in queue (this might block if queue is full, indicating writer is slow)
+            t_wait_write = time.perf_counter()
             write_queue.put((logits_t, metadata))
+            benchmarker.record_event('wait_for_writer_queue_duration', time.perf_counter() - t_wait_write)
             
             inference_pbar.update(1)
 
@@ -476,7 +508,8 @@ def main_hydra(cfg: DictConfig):
         writer_p.terminate()
         
     finally:
-        inference_pbar.close()
+        benchmarker.stop()
+        benchmarker.save_report()
         if writer_p.is_alive():
             write_queue.put(None)
             writer_p.join()
@@ -487,49 +520,5 @@ def main_hydra(cfg: DictConfig):
         # Explicitly release GPU memory
         if 'engine' in locals():
             engine.cleanup()
-
-    # Metadata
-    # Use adapter labels/colormap if available, else fallback to globals
-    if adapter.labels:
-        labels = adapter.labels
-        color_map = adapter.color_map
-    else:
-        labels = NEW_LABELS
-        color_map = LABEL_COLOR_MAP
-
-    class_map = {
-        label: {
-            "index": i, 
-            "color": color_map.get(label, [128,128,128]) if isinstance(color_map.get(label), list) else color_map.get(label, np.array([128,128,128])).tolist()
-        } 
-        for i, label in enumerate(labels)
-    }
-    with open(output_path / f"{tile_path.name}_classmap.json", "w") as f:
-        json.dump(class_map, f)
-
-    save_preview = cfg.pipeline.output.get('save_preview', True)
-    if save_preview:
-        try:
-            downscale = cfg.pipeline.output.get("preview_downscale_factor", 10)
-            class_path = out_paths['class']
-            if class_path.exists():
-                with rasterio.open(class_path) as src:
-                    generate_low_res_preview(
-                        src.read(1), 
-                        output_path / "preview.png", 
-                        save_preview=save_preview, 
-                        downscale_factor=downscale,
-                        labels=labels,
-                        color_map=color_map
-                    )
-            else:
-                log.warning(f"Class map file not found at {class_path}. Skipping preview generation.")
-        except Exception as e:
-            log.error(f"Failed to generate preview: {e}")
-
-    try:
-        generate_single_node_viewer(tile_path.name, str(output_path.parent))
-    except Exception as e:
-        log.error(f"Failed to generate viewer: {e}")
 
     log.info(f"Finished in {time.time() - t0:.2f}s")

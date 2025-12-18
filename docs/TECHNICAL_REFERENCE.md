@@ -257,13 +257,48 @@ To hide I/O latency and CPU-heavy aggregation costs, the pipeline uses `torch.mu
 
 ---
 
-## 8. Configuration System (Hydra)
+## 8. Output Generation: The Reporter System
+
+GSIP employs a flexible **Reporter** pattern to handle the generation of analysis results. This decouples the core inference loop from specific file formats, allowing users to "plug-and-play" different output modules without modifying the codebase.
+
+### 8.1 The Reporter Interface (`BaseReporter`)
+All reporters must inherit from `src.eo_core.reporters.base.BaseReporter` and implement three methods:
+1.  **`on_start(context)`**: Initialization (e.g., creating file handles). `context` provides paths, profile metadata, and model info.
+2.  **`on_chunk(data)`**: Called for each reconstructed output chunk. `data` contains the `valid_probs` (ZoR probabilities) and spatial `window`.
+3.  **`on_finish(context)`**: Finalization (e.g., closing files, aggregating statistics).
+
+### 8.2 Standard Reporters
+*   **`GeoTIFFReporter`**: Writes standard geospatial rasters.
+    *   *Outputs:* Class Map (`_class.tif`), Confidence (`_maxprob.tif`), Entropy (`_entropy.tif`), Prediction Gap (`_gap.tif`).
+*   **`PreviewReporter`**: Generates a quick-look PNG preview of the classification map.
+*   **`MetadataReporter`**: Generates metadata (`classmap.json`) and the interactive HTML viewer (`viewer.html`).
+*   **`GlobalProbabilityReporter`**: Performs **Global Average Pooling** on the entire reconstructed tile to produce a single 1D probability vector (saved as `.npy` and `.json`). This provides a "whole-tile" classification summary.
+*   **`ProbabilityReporter`**: (Optional) Writes the full probability distribution (multi-band GeoTIFF) for advanced analysis.
+
+### 8.3 Configuration
+Reporters are defined in the **Model Configuration** files (e.g., `configs/model/convnext_s2.yaml`) under `pipeline.reporters`. They use Hydra's `_target_` syntax for dynamic instantiation:
+
+```yaml
+pipeline:
+  reporters:
+    geotiff:
+      _target_: eo_core.reporters.geotiff.GeoTIFFReporter
+    preview:
+      _target_: eo_core.reporters.preview.PreviewReporter
+    # Custom reporters can be added here simply by pointing to their Python path
+    my_stats:
+      _target_: my_project.stats_reporter.JSONStatsReporter
+```
+
+---
+
+## 9. Configuration System (Hydra)
 
 The entire pipeline is controlled via hierarchical YAML configurations using **Hydra**.
 
 **Root:** `configs/config.yaml`
 
-### 8.1 Inference Parameters (`configs/pipeline/inference_params.yaml`)
+### 9.1 Inference Parameters (`configs/pipeline/inference_params.yaml`)
 | Parameter | Key | Definition |
 | :--- | :--- | :--- |
 | **Zone of Responsibility** | `tiling.zone_of_responsibility_size` | Unit of output writing. Can be set to `"auto"` for dynamic RAM optimization. |
@@ -286,7 +321,7 @@ Adapters decouple the pipeline from specific model architectures.
 
 ---
 
-## 9. Multi-Modal Deep Learning Fusion
+## 10. Multi-Modal Deep Learning Fusion
 
 For configurations enabling fusion (`use_sentinel_1: true`), the pipeline utilizes the `DeepLearningRegistrationPipeline` module (`src/eo_core/fusion.py`).
 

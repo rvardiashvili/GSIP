@@ -111,3 +111,4 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+thesis_drafts/

@@ -17,3 +17,4 @@ psutil
 pandas
 safetensors
 timm
+pynvml

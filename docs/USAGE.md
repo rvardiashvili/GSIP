@@ -54,9 +54,36 @@ python src/main.py --benchmark --input_dir /path/to/all_tiles/ --output_folder .
 ```
 *Note: Ensure you configure the default model in `configs/config.yaml` or pass `model=...` override if benchmarking a specific model.*
 
+## Advanced Configuration: Reporters
+
+GSIP uses a "Reporter" system to generate outputs. You can enable, disable, or add new output formats directly from the command line.
+
+**Disable a Reporter (e.g., Preview):**
+Use the `~` prefix to remove a key.
+```bash
+python src/main.py model=resnet_s2 ... ~pipeline.reporters.preview
+```
+
+**Add a Custom Reporter:**
+You can inject a new reporter configuration using the `+` prefix.
+```bash
+python src/main.py model=resnet_s2 ... \
+  +pipeline.reporters.my_stats._target_=my_custom_package.StatisticsReporter
+```
+
+**Enable Optional Probability Cubes:**
+The `ProbabilityReporter` is available but disabled by default in some configs to save space. To enable it:
+```bash
+python src/main.py model=resnet_s2 ... \
+  +pipeline.reporters.probs._target_=eo_core.reporters.probability.ProbabilityReporter
+```
+
 ## Understanding Outputs
 
 Check the `out/` directory for results:
 *   `*_class.tif`: The final class/segmentation map.
 *   `*_maxprob.tif`: Confidence map.
+*   `*_entropy.tif`: Uncertainty map (Shannon Entropy).
+*   `*_global_probs.npy`: Single 1D array of average class probabilities for the *entire* tile.
 *   `preview.png`: A quick look RGB image of the classification.
+*   `viewer.html`: An interactive web-based viewer for the result.

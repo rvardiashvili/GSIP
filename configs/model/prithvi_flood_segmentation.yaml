@@ -45,4 +45,12 @@ model:
 pipeline:
   output:
     save_gradient_preview: true
+  
+  reporters:
+    geotiff:
+      _target_: eo_core.reporters.geotiff.GeoTIFFReporter
+    preview:
+      _target_: eo_core.reporters.preview.PreviewReporter
+    metadata:
+      _target_: eo_core.reporters.metadata.MetadataReporter
 
