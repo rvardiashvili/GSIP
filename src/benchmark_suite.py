@@ -150,7 +150,11 @@ if __name__ == "__main__":
     # 3. Define Models to Test
     # Ensure these have corresponding .yaml files in configs/model/
     MODELS_TO_TEST = [
-        "prithvi_crop"
+        "resnet_s2",
+        "resnet_all",
+        "convnext_s2",
+        "prithvi_crop",
+        "prithvi_flood_segmentation"
     ]
     
     run_benchmark_suite(INPUT_TILE, OUTPUT_DIR, MODELS_TO_TEST)

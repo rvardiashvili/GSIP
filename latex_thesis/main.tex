@@ -1,0 +1,107 @@
+\documentclass[12pt, a4paper]{report}
+
+% Essential Packages
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{graphicx}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{hyperref}
+\usepackage{geometry}
+\usepackage{fancyhdr}
+\usepackage{setspace}
+\usepackage{titlesec}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{float}
+\usepackage{biblatex}
+
+% Geometry Settings
+\geometry{
+    top=2.5cm,
+    bottom=2.5cm,
+    left=3cm,
+    right=2.5cm
+}
+
+% Hyperref Setup
+\hypersetup{
+    colorlinks=true,
+    linkcolor=black,
+    filecolor=magenta,      
+    urlcolor=blue,
+    citecolor=blue,
+    pdftitle={GeoSpatial Inference Pipeline Thesis},
+    pdfauthor={Rati Vardiashvili},
+}
+
+% Code Listing Settings
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+
+\lstdefinestyle{mystyle}{
+    backgroundcolor=\color{backcolour},   
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{magenta},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,         
+    breaklines=true,                 
+    captionpos=b,                    
+    keepspaces=true,                 
+    numbers=left,                    
+    numbersep=5pt,                  
+    showspaces=false,                
+    showstringspaces=false,
+    showtabs=false,                  
+    tabsize=2
+}
+
+\lstset{style=mystyle}
+
+% Bibliography Resource
+\addbibresource{references.bib}
+
+% Title Data
+\title{\textbf{GeoSpatial Inference Pipeline (GSIP):\\
+Distributing ML Inference on Big Geo Data}}
+\author{Rati Vardiashvili}
+\date{\today}
+
+\begin{document}
+
+% Title Page
+\maketitle
+
+% Abstract (Optional)
+% \begin{abstract}
+% \end{abstract}
+
+% Table of Contents
+\tableofcontents
+\listoffigures
+\listoftables
+
+\newpage
+
+% Chapters
+\include{chapters/01_introduction}
+\include{chapters/02_theoretical_background}
+\include{chapters/03_methodology}
+\include{chapters/04_algorithmic_solution}
+\include{chapters/05_evaluation}
+\include{chapters/06_discussion}
+\include{chapters/07_conclusion}
+
+% References
+\printbibliography[heading=bibintoc, title={References}]
+
+% Appendices
+\appendix
+% \include{chapters/09_appendix_usage}
+
+\end{document}
