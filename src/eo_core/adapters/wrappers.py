@@ -17,19 +17,27 @@ class MetadataPassingWrapper(nn.Module):
         self.activation = activation
 
     def forward(self, input_package: Tuple[Any, Any]) -> Tuple[torch.Tensor, Any]:
-        patches_np, metadata = input_package
+        patches_list, metadata = input_package
         
-        # patches_np is (N_total, C, H, W) numpy array
+        # patches_list is a List of (C, H, W) numpy views
         results = []
-        n = len(patches_np)
+        n = len(patches_list)
         
         # Ensure norms are on device
         norm_m = self.norm_m.to(self.device_target)
         norm_s = self.norm_s.to(self.device_target)
         
+        # Import numpy here (or ensure it's imported at top)
+        import numpy as np
+
         # Iterate in batches
         for i in range(0, n, self.batch_size):
-            batch_np = patches_np[i:i+self.batch_size]
+            # Slice the list (cheap)
+            batch_list = patches_list[i:i+self.batch_size]
+            
+            # Stack into contiguous array just for this batch (Efficiency Fix!)
+            batch_np = np.stack(batch_list, axis=0)
+            
             batch = torch.from_numpy(batch_np).float().to(self.device_target)
             
             # Normalize

@@ -40,5 +40,5 @@ python src/main.py model=prithvi_segmentation input_path=/path/to/tile output_pa
 -   **Multi-Model Support:** Easily switch between ResNet, ConvNeXt, and Segmentation models via Config Adapters.
 -   **Scalable Tiling:** Processes massive images using an artifact-free Overlap-Tile strategy.
 -   **Smart Memory Management:** Automatically calculates safe processing chunk sizes based on available RAM.
--   **Multi-Modal:** Supports fusion of Optical (S2) and Radar (S1) data.
+-   **High-Performance Architecture:** Features a **List-of-Views** memory optimization for zero-copy patch processing, drastically reducing RAM usage.
 -   **Uncertainty Quantification:** Outputs Entropy and Confidence maps.

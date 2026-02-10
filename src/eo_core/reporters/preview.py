@@ -4,7 +4,7 @@ import numpy as np
 from pathlib import Path
 from typing import Dict, Any
 from .base import BaseReporter
-from ..utils import generate_low_res_preview, generate_float_preview, NEW_LABELS, LABEL_COLOR_MAP
+from ..utils import generate_low_res_preview, generate_float_preview
 
 log = logging.getLogger(__name__)
 
@@ -12,6 +12,10 @@ class PreviewReporter(BaseReporter):
     """
     Reporter that generates a low-resolution PNG preview of the classification map.
     """
+    @staticmethod
+    def get_memory_multiplier(config: Dict[str, Any], context: Dict[str, Any]) -> float:
+        return 0.0 # Operates on files on disk or at end of process
+
     def on_start(self, context: Dict[str, Any]):
         pass # Nothing to setup
 
@@ -34,12 +38,12 @@ class PreviewReporter(BaseReporter):
         class_path = output_path / f"{tile_name}_class.tif"
         
         # Determine labels/colormap
-        if adapter and adapter.labels:
+        if adapter and hasattr(adapter, 'labels'):
             labels = adapter.labels
             color_map = adapter.color_map
         else:
-            labels = NEW_LABELS
-            color_map = LABEL_COLOR_MAP
+            labels = None
+            color_map = None
 
         # 1. Generate Class Map Preview
         if class_path.exists():

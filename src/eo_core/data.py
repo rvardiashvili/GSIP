@@ -20,6 +20,9 @@ import rasterio.transform
 import rasterio.vrt
 from rasterio.vrt import WarpedVRT
 import re
+import logging
+
+log = logging.getLogger(__name__)
 
 # --- Utility Functions for Chunk Reading ---
 
@@ -145,7 +148,7 @@ def _read_s1_bands_for_chunk(
                 has_gcps = hasattr(src, 'gcps') and src.gcps and src.gcps[0]
                 
                 if not has_gcps and not src.crs:
-                     print(f"WARNING: S1 Source {manifest_path.parent.name} has NO CRS/GCPs. Skipping.")
+                     log.warning(f"S1 Source {manifest_path.parent.name} has NO CRS/GCPs. Skipping.")
                      continue
 
                 # Calculate Valid Intersection in Target (Reference) Coordinates
@@ -191,7 +194,7 @@ def _read_s1_bands_for_chunk(
                     try:
                         rasterio.warp.reproject(**reproject_kwargs)
                     except Exception as e:
-                        print(f"Error reprojecting S1 source {manifest_path}: {e}")
+                        log.error(f"Error reprojecting S1 source {manifest_path}: {e}")
                         continue
                     
                     # Place Valid Data into a temp buffer for this source
@@ -472,9 +475,10 @@ def read_chunk_data(tile_folder: Union[Path, List[Path]], bands_list: List[str],
     else:
         return s2_data
 
-def cut_into_patches(img_chunk: np.ndarray, patch_size: int, stride: int = None) -> Tuple[np.ndarray, List[Tuple[int, int]], int, int, int]:
+def cut_into_patches(img_chunk: np.ndarray, patch_size: int, stride: int = None) -> Tuple[List[np.ndarray], List[Tuple[int, int]], int, int, int]:
     """
     Cuts the larger image chunk into smaller, overlapping patches for inference.
+    Returns a list of numpy views (no data copy) to save memory.
     """
     if stride is None:
         stride = patch_size // 2
@@ -518,5 +522,5 @@ def cut_into_patches(img_chunk: np.ndarray, patch_size: int, stride: int = None)
         else:
             raise ValueError(f"Chunk size ({H}x{W}) is smaller than patch size ({patch_size}).")
         
-    patches_array = np.stack(patches, axis=0)
-    return patches_array, coords, H, W, patch_size
+    # Return list of views to avoid 4x memory expansion
+    return patches, coords, H, W, patch_size

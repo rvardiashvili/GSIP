@@ -10,6 +10,9 @@ from scipy.ndimage import zoom
 import matplotlib.pyplot as plt # Added
 import matplotlib.cm as cm # Added 
 import matplotlib.colors as colors # Added 
+import logging
+
+log = logging.getLogger(__name__)
 
 # ----------------------------------------------------------------------
 # --- Constants & Helpers ---
@@ -20,43 +23,6 @@ def get_device():
     if torch.cuda.is_available():
         return torch.device("cuda")
     return torch.device("cpu")
-
-# ----------------------------------------------------------------------
-# --- Labels & Metadata ---
-# ----------------------------------------------------------------------
-
-FALLBACK_LABEL_KEY = 'No_Dominant_Class' 
-
-# BigEarthNet v1 Labels (19 classes or 43 classes depending on version)
-# Here we define the standard 43 classes as a fallback.
-NEW_LABELS = [
-    'Annual-crops', 'Permanent-crops', 'Pastures', 'Complex-cultivation-patterns', 
-    'Agro-forestry-areas', 'Broad-leaved-forest', 'Coniferous-forest', 'Mixed-forest', 
-    'Natural-grasslands-and-sparsely-vegetated-areas', 'Moors-and-heathland', 
-    'Sclerophyllous-vegetation', 'Transitional-woodland-shrub', 'Beaches-sandy-plains', 
-    'Intertidal-flats', 'Bare-areas', 'Burnt-areas', 'Inland-wetlands', 
-    'Coastal-wetlands', 'Continental-water', 'Marine-water', 'Glaciers-and-perpetual-snow', 
-    'Non-irrigated-arable-land', 'Permanently-irrigated-land', 'Rice-fields', 
-    'Vineyards', 'Fruit-trees-and-berry-plantations', 'Olive-groves', 
-    'Annual-crops-with-associated-fallow-lands', 
-    'Land-principally-occupied-by-agriculture-with-significant-areas-of-natural-vegetation', 
-    'Broad-leaved-forest-evergreen', 'Broad-leaved-forest-deciduous', 
-    'Coniferous-forest-evergreen', 'Coniferous-forest-deciduous', 'Mixed-forest', 
-    'Natural-grasslands', 'Sparsely-vegetated-areas', 'Salt-marshes', 
-    'Bogs-and-peatlands', 'Water-bodies', 'Snow-and-ice', 'Urban-fabric', 
-    'Industrial-or-commercial-units', 'Road-and-rail-networks-and-associated-land'
-]
-
-# ----------------------------------------------------------------------
-# Consistent Label Color Map Generation
-# ----------------------------------------------------------------------
-
-LABEL_COLOR_MAP: Dict[str, np.ndarray] = {
-    label: np.random.randint(0, 256, 3, dtype=np.uint8) 
-    for label in NEW_LABELS
-}
-LABEL_COLOR_MAP[FALLBACK_LABEL_KEY] = np.array([128,128,128], dtype=np.uint8)
-
 
 # ----------------------------------------------------------------------
 # Visualization Functions
@@ -76,16 +42,25 @@ def generate_low_res_preview(
     if not save_preview:
         return
 
-    # print(f"🎨 Generating low-res preview image (downscale={downscale_factor})...")
-
     if downscale_factor > 1:
         downscaled_mask = zoom(mask_data, 1.0 / downscale_factor, order=0)
     else:
         downscaled_mask = mask_data
     
-    # Use provided labels/colormap or fallback to globals
-    target_labels = labels if labels is not None else NEW_LABELS
-    target_color_map = color_map if color_map is not None else LABEL_COLOR_MAP
+    if labels is None or color_map is None:
+        log.warning("Labels or Color Map not provided for preview generation. Using grayscale fallback.")
+        # Create a simple grayscale image normalized to 0-255 based on unique values
+        norm_mask = ((downscaled_mask - downscaled_mask.min()) / (downscaled_mask.max() - downscaled_mask.min() + 1e-6) * 255).astype(np.uint8)
+        try:
+            img_pil = Image.fromarray(norm_mask, 'L')
+            img_pil.save(output_path, 'PNG')
+        except Exception as e:
+            log.error(f"Error saving grayscale preview image: {e}")
+        return
+
+    # Use provided labels/colormap
+    target_labels = labels
+    target_color_map = color_map
     
     # Ensure color map keys exist in labels (robustness)
     # Construct array based on index in target_labels
@@ -110,9 +85,8 @@ def generate_low_res_preview(
     try:
         img_pil = Image.fromarray(rgb_image, 'RGB')
         img_pil.save(output_path, 'PNG')
-        # print(f"  Saved preview to {output_path.name}")
     except Exception as e:
-        print(f"❌ Error saving preview image: {e}")
+        log.error(f"Error saving preview image: {e}")
 
 def generate_float_preview(
     data: np.ndarray,
@@ -158,7 +132,7 @@ def generate_float_preview(
         img_pil = Image.fromarray(rgb_image, 'RGB')
         img_pil.save(output_path, 'PNG')
     except Exception as e:
-        print(f"❌ Error saving float preview image: {e}")
+        log.error(f"Error saving float preview image: {e}")
 
     # Generate color bar if requested
     if colorbar_path:
@@ -173,4 +147,4 @@ def generate_float_preview(
             plt.savefig(colorbar_path, bbox_inches='tight', dpi=100)
             plt.close(fig) # Close the figure to free memory
         except Exception as e:
-            print(f"❌ Error saving color bar image: {e}")
+            log.error(f"Error saving color bar image: {e}")

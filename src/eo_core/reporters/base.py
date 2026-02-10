@@ -9,6 +9,22 @@ class BaseReporter(ABC):
     Reporters handle the writing of inference results to various formats (GeoTIFF, PNG, JSON, etc.).
     """
 
+    @staticmethod
+    def get_memory_multiplier(config: Dict[str, Any], context: Dict[str, Any]) -> float:
+        """
+        Calculates the memory usage multiplier for this reporter.
+        
+        Args:
+            config: The configuration dictionary for this specific reporter instance.
+            context: Global context containing 'num_classes', 'num_bands', 'is_segmentation', etc.
+            
+        Returns:
+            float: The memory multiplier. The total memory usage for a chunk of size (H, W) 
+                   will be estimated as: (H * W * multiplier).
+                   The multiplier should effectively represent "Bytes Per Pixel".
+        """
+        return 0.0
+
     @abstractmethod
     def on_start(self, context: Dict[str, Any]):
         """

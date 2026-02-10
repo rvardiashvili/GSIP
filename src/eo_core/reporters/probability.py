@@ -11,6 +11,12 @@ class ProbabilityReporter(BaseReporter):
     Reporter that writes the full probability distribution (all classes) to a multi-band GeoTIFF.
     Each band corresponds to a class index.
     """
+    @staticmethod
+    def get_memory_multiplier(config: Dict[str, Any], context: Dict[str, Any]) -> float:
+        num_classes = context.get('num_classes', 1)
+        # Saves (C, H, W) as float32
+        return num_classes * 4.0
+
     def __init__(self):
         self.dst = None
 

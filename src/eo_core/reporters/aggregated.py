@@ -11,6 +11,10 @@ class GlobalProbabilityReporter(BaseReporter):
     This effectively performs Global Average Pooling over the entire reconstructed map.
     The result is saved as a .npy file (and optionally .json).
     """
+    @staticmethod
+    def get_memory_multiplier(config: Dict[str, Any], context: Dict[str, Any]) -> float:
+        return 0.0 # Accumulates into fixed-size vector (C,), negligible per-pixel cost.
+
     def __init__(self):
         self.sum_probs = None # Will be (C,)
         self.total_pixels = 0
@@ -40,7 +44,6 @@ class GlobalProbabilityReporter(BaseReporter):
         
         self.sum_probs += chunk_sum
         self.total_pixels += chunk_pixels
-        # log.debug(f"GlobalProb chunk processed. Pixels: {chunk_pixels}")
 
     def on_finish(self, context: Dict[str, Any]):
         if self.total_pixels > 0:

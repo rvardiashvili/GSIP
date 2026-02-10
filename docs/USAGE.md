@@ -47,12 +47,13 @@ python src/main.py model=prithvi_segmentation input_path=/path/to/S2_tile output
 
 ## Benchmarking Mode
 
-To run performance benchmarks across multiple tiles:
+To run a comprehensive performance benchmark suite across multiple models and configurations:
 
 ```bash
-python src/main.py --benchmark --input_dir /path/to/all_tiles/ --output_folder ./benchmark_results
+python src/benchmark_suite.py
 ```
-*Note: Ensure you configure the default model in `configs/config.yaml` or pass `model=...` override if benchmarking a specific model.*
+
+This script orchestrates back-to-back runs, manages GPU cooldowns, and generates a consolidated report folder in `out/benchmarks_final/consolidated_results` containing performance metrics and artifacts.
 
 ## Advanced Configuration: Reporters
 

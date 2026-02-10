@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, Tuple, List
 import timm
 import os
+import logging
 from huggingface_hub import hf_hub_download
 import safetensors.torch
 from ..adapters.base import BaseAdapter
@@ -12,6 +13,8 @@ from ..data import _read_s2_bands_for_chunk, _read_s1_bands_for_chunk, cut_into_
 from .wrappers import MetadataPassingWrapper
 from ..memory_utils import estimate_optimal_batch_size
 from omegaconf import OmegaConf
+
+log = logging.getLogger(__name__)
 
 # Try importing ConfigILM for BIFOLD compatibility
 try:
@@ -36,7 +39,7 @@ class BigEarthNetAdapter(BaseAdapter):
         else:
             model_id = self.params.get('model_name', 'resnet50')
 
-        print(f"DEBUG: Resolved model_id='{model_id}'")
+        log.debug(f"Resolved model_id='{model_id}'")
 
         # 2. Build Model
         num_classes = self.params.get('num_classes', 19)
@@ -47,7 +50,7 @@ class BigEarthNetAdapter(BaseAdapter):
 
         # Check if it's a BIFOLD model and we have ConfigILM
         if HAS_CONFIGILM and "bifold" in str(model_id).lower():
-            print(f"🏗️ Building model with ConfigILM: {model_id}")
+            log.info(f"Building model with ConfigILM: {model_id}")
             try:
                 # Map to TIMM names expected by ConfigILM
                 timm_name = "resnet50"
@@ -68,7 +71,7 @@ class BigEarthNetAdapter(BaseAdapter):
                     core_model = ConfigILM.ConfigILM(config)
                 is_configilm = True
             except Exception as e:
-                print(f"⚠️ ConfigILM instantiation failed ({e}). Falling back to direct TIMM.")
+                log.warning(f"ConfigILM instantiation failed ({e}). Falling back to direct TIMM.")
 
         if core_model is None:
             # Fallback to pure TIMM
@@ -77,7 +80,7 @@ class BigEarthNetAdapter(BaseAdapter):
             elif "convnext" in model_id.lower(): timm_name = "convnextv2_base"
             elif "resnet101" in model_id.lower(): timm_name = "resnet101"
             
-            print(f"🏗️ Building model with TIMM: {timm_name} (In={in_channels}, Out={num_classes})")
+            log.info(f"Building model with TIMM: {timm_name} (In={in_channels}, Out={num_classes})")
             core_model = timm.create_model(
                 timm_name, 
                 pretrained=False, 
@@ -97,10 +100,10 @@ class BigEarthNetAdapter(BaseAdapter):
                     try:
                         checkpoint_path = hf_hub_download(repo_id=model_id, filename="model.safetensors")
                     except:
-                        print(f"⚠️ Could not find weights file for {model_id} on Hub. Using random init.")
+                        log.warning(f"Could not find weights file for {model_id} on Hub. Using random init.")
             
             if checkpoint_path:
-                print(f"📥 Loading weights from: {checkpoint_path}")
+                log.info(f"Loading weights from: {checkpoint_path}")
                 
                 if str(checkpoint_path).endswith('.safetensors'):
                     state_dict = safetensors.torch.load_file(checkpoint_path, device='cpu')
@@ -145,11 +148,11 @@ class BigEarthNetAdapter(BaseAdapter):
                 # Load
                 missing, unexpected = core_model.load_state_dict(new_state_dict, strict=False)
                 if missing:
-                    print(f"   Missing keys: {len(missing)} (e.g. {missing[:3]}...)")
+                    log.warning(f"Missing keys: {len(missing)} (e.g. {missing[:3]}...)")
                 else:
-                    print("✅ Weights loaded successfully.")
+                    log.info("Weights loaded successfully.")
         except Exception as e:
-            print(f"⚠️ Failed to load weights: {e}. Proceeding with random initialization.")
+            log.warning(f"Failed to load weights: {e}. Proceeding with random initialization.")
 
         # Get Device (Engine will move this wrapper to device, but we need to know it for batching)
         device_str = self.params.get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
@@ -173,12 +176,12 @@ class BigEarthNetAdapter(BaseAdapter):
             input_shape = (self.num_bands, self.patch_size, self.patch_size)
             # core_model is the model to be wrapped
             batch_size = estimate_optimal_batch_size(core_model, input_shape, device)
-            print(f"Auto-configured batch size: {batch_size}")
+            log.info(f"Auto-configured batch size: {batch_size}")
         
         # Wrap it with activation on GPU
         return MetadataPassingWrapper(core_model, batch_size, norm_m, norm_s, device, activation='sigmoid')
 
-    def preprocess(self, raw_input: Dict[str, Any]) -> Tuple[np.ndarray, Dict[str, Any]]:
+    def preprocess(self, raw_input: Dict[str, Any]) -> Tuple[List[np.ndarray], Dict[str, Any]]:
         """
         raw_input: {
             'tile_folder': Path, 
@@ -186,6 +189,9 @@ class BigEarthNetAdapter(BaseAdapter):
             'w_read': int, 'h_read': int,
             'bands': List[str]
         }
+        Returns:
+            patches: List of numpy arrays (views), shape (C, P, P) each.
+            metadata: Dict
         """
         tile_folder = Path(raw_input['tile_folder'])
         r = raw_input['r_start']
@@ -238,8 +244,7 @@ class BigEarthNetAdapter(BaseAdapter):
         
         patches, coords, H_crop, W_crop, _ = cut_into_patches(input_data, patch_size, stride=stride)
         
-        # patches is (N, C, P, P) numpy array
-        # We return it as numpy so InferenceEngine doesn't auto-move it to GPU
+        # patches is now a List[np.ndarray] of views. Efficient!
         
         metadata = {
             'coords': coords, 

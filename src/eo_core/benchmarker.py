@@ -80,13 +80,28 @@ class Benchmarker:
         self.events[name].append(value)
 
     def _loop(self):
+        current_process = psutil.Process()
         while self.running:
             try:
+                # Calculate Process-specific Memory (RSS)
+                # Sum memory of main process and all children (e.g. Writer Process)
+                proc_mem_bytes = current_process.memory_info().rss
+                try:
+                    children = current_process.children(recursive=True)
+                    for child in children:
+                        try:
+                            proc_mem_bytes += child.memory_info().rss
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            pass
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+
                 sample = {
                     "timestamp": time.time(),
                     "cpu_percent": psutil.cpu_percent(interval=None),
                     "ram_percent": psutil.virtual_memory().percent,
                     "ram_used_gb": round(psutil.virtual_memory().used / (1024**3), 2),
+                    "process_ram_used_gb": round(proc_mem_bytes / (1024**3), 2)
                 }
 
                 # GPU Stats

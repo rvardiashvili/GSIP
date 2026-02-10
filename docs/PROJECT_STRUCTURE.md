@@ -18,6 +18,7 @@ This document outlines the directory layout and purpose of key files in the **Ge
 │
 ├── src/
 │   ├── main.py               # CLI Entry Point
+│   ├── benchmark_suite.py    # Benchmarking Suite Orchestrator
 │   ├── requirements.txt      # Python dependencies
 │   └── eo_core/              # Core Package Code (GeoSpatial Inference Pipeline logic)
 │       ├── adapters/         # Model Adapters (Interface for various ML models)
@@ -27,7 +28,7 @@ This document outlines the directory layout and purpose of key files in the **Ge
 │       ├── memory_utils.py   # Utilities for dynamic memory management
 │       ├── process.py        # Main orchestration of tiling and inference pipeline
 │       ├── utils.py          # General utility functions
-│       └── ...               # Other modules like benchmark, fusion, download, viewer
+│       └── ...               # Other modules like benchmarker, viewer
 │
 ├── out/                      # Default Output Directory
 ├── docs/                     # Documentation Directory

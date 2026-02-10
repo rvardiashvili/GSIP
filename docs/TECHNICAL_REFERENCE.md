@@ -98,13 +98,18 @@ $$ \text{Chunk}_{dim} = \text{ZoR}_{dim} + 2 \cdot \text{Halo}_{pixels} $$
 *   **Halo Size:** Must be $\ge \frac{ERF}{2}$. For ResNet-50, typical ERF suggests a halo of ~128 pixels is safe.
 
 #### 3.1.1 Memory Auto-Configuration
-The system implements a rigorous memory model to calculate the safe ZoR size. This is managed by the `resolve_zor` function in `src/eo_core/process.py`, which leverages `calculate_optimal_zor` from `src/eo_core/memory_utils.py`. The formula accounts for the different memory footprints of classification vs. segmentation models, system RAM, and pipeline configuration.
+The system implements a rigorous memory model to calculate the safe ZoR size. This is managed by the `resolve_zor` function in `src/eo_core/process.py`, which leverages `calculate_optimal_zor` from `src/eo_core/memory_utils.py`. 
 
-$$ BPP_{total} = BPP_{patches} + BPP_{logits} + BPP_{recon} + BPP_{metrics} + BPP_{io} + 200_{overhead} $$
+**Optimization: List-of-Views Architecture**
+Previously, processing overlapping patches required duplicating memory (4x expansion for 50% overlap). The pipeline now uses a **List of Views** strategy, where patches are zero-copy references to the original input chunk. This drastically reduces the memory footprint.
 
-*   **Patches:** Weighted by the `prefetch_queue_size` and overlap factor.
-*   **Logits:** The largest variable. For **Segmentation**, this is a full 4D map ($N \times C \times P \times P$), consuming significantly more RAM than **Classification** vectors ($N \times C$).
+The formula accounts for:
+$$ BPP_{total} = BPP_{patches} + BPP_{logits} + BPP_{recon} + BPP_{metrics} + BPP_{io} + 800_{overhead} $$
+
+*   **Patches:** Weighted by the `prefetch_queue_size`. Thanks to the View optimization, this is now `num_bands * 4 bytes` (no overlap factor).
+*   **Logits:** The largest variable. For **Segmentation**, this is a full 4D map ($N \times C \times P \times P$).
 *   **Metrics:** Buffers for Entropy, Confidence, and Gap are only allocated if enabled in the config.
+*   **Writer Overhead:** An additional safety margin (500 BPP) is added to account for GDAL/Rasterio internal buffering.
 
 ### 3.1.2 Optimal GPU Batch Size
 
@@ -137,6 +142,9 @@ The pipeline execution begins at `src/main.py`. This script leverages the `Hydra
 *   **Mandatory Parameters**: Essential parameters such as `input_path` (specifying the path to the satellite imagery) and `output_path` (where results will be stored) are explicitly defined within the configuration.
 
 Upon successful configuration loading, `src/main.py` invokes `main_hydra(cfg)` located in `src/eo_core/process.py`, which acts as the central orchestrator for the entire inference workflow.
+
+**Benchmarking:**
+For performance testing, `src/benchmark_suite.py` serves as the dedicated entry point. It orchestrates back-to-back runs of multiple models, monitors GPU temperatures (with smart cooldowns), and consolidates reports and artifacts into a centralized results directory.
 
 ### 4.2 Orchestration and System Initialization (`main_hydra`)
 
@@ -318,20 +326,3 @@ Adapters decouple the pipeline from specific model architectures.
 *   `path`: Python import path to the adapter module.
 *   `class`: Name of the adapter class.
 *   `params`: Dictionary of arguments passed to the adapter's `__init__` (e.g., `bands`, `weights_path`).
-
----
-
-## 10. Multi-Modal Deep Learning Fusion
-
-For configurations enabling fusion (`use_sentinel_1: true`), the pipeline utilizes the `DeepLearningRegistrationPipeline` module (`src/eo_core/fusion.py`).
-
-### 9.1 Spatial Transformer Network (STN) Flow
-Instead of relying solely on geometric GCP alignment, this module allows for feature-based alignment:
-
-1.  **Feature Extraction:** A shared encoder extracts keypoints from S1 (Source) and S2 (Target).
-2.  **Regression:** A regressor predicts the affine transformation matrix $\theta$ (6 parameters).
-3.  **Grid Generation:** $G = \texttt{affine_grid}(\theta, \text{size})$.
-4.  **Sampling:** $S1_{aligned} = \texttt{grid_sample}(S1_{input}, G)$.
-5.  **Concatenation:** $X_{input} = \text{Concat}(S1_{aligned}, S2)$.
-
-*Note: The current implementation defaults to Identity transformation if no weights are provided, relying on the geometric alignment step in Section 2.2.1.*

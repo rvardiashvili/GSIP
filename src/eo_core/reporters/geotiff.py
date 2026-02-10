@@ -20,6 +20,54 @@ class GeoTIFFReporter(BaseReporter):
         self.save_gradient = False
         self.n_classes = 1
 
+    @staticmethod
+    def get_memory_multiplier(config: Dict[str, Any], context: Dict[str, Any]) -> float:
+        """
+        Estimates memory usage for GeoTIFF writer buffers.
+        Base usage:
+        - Class Map: 1 byte (uint8)
+        - Confidence: 4 bytes (float32)
+        - Entropy: 4 bytes (float32)
+        - Gap: 4 bytes (float32) + 8 bytes (intermediate calc)
+        - Gradient: 4 bytes (float32)
+        """
+        multiplier = 0.0
+        
+        # Check global pipeline output config (legacy support) OR reporter-specific config
+        # The writer process constructs the reporter with specific config if provided,
+        # but often it relies on the global 'pipeline.output' section.
+        # We need to check how config is passed.
+        
+        # In current process.py, 'config' passed to on_start is the full hydra config.
+        # But here 'config' arg is the reporter's own config node.
+        
+        # Assumption: The reporter config might control what it saves, 
+        # OR it falls back to pipeline.output.
+        # For this implementation, we will check the 'context' for the global config
+        # as that's where save_confidence etc usually live in this codebase.
+        
+        pipeline_cfg = context.get('pipeline', {}).get('output', {})
+        
+        # 1. Class Map (Always saved by GeoTIFF reporter usually, but let's assume yes)
+        multiplier += 1.0 # uint8
+        
+        if pipeline_cfg.get('save_confidence', True):
+            multiplier += 4.0
+            
+        if pipeline_cfg.get('save_entropy', True):
+            multiplier += 4.0
+            
+        if pipeline_cfg.get('save_gap', True):
+            # 4 bytes output + 2 * 4 bytes for top2 partition
+            multiplier += 12.0 
+            
+        if pipeline_cfg.get('save_gradient_preview', False):
+            # Only if binary
+            if context.get('num_classes', 1) == 2:
+                multiplier += 4.0
+                
+        return multiplier
+
     def on_start(self, context: Dict[str, Any]):
         output_path = context['output_path']
         tile_name = context['tile_name']
