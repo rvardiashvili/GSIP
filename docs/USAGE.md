@@ -7,8 +7,17 @@ This guide explains how to run the GeoSpatial Inference Pipeline (GSIP) using th
 The general command to run the pipeline is:
 
 ```bash
-python src/main.py model=<model_config_name> input_path=<path_to_tile> output_path=<path_to_output_dir>
+python src/main.py model=<model_config_name> input_path=<path_to_data> output_path=<path_to_output_dir>
 ```
+
+### Understanding `input_path`
+The `input_path` parameter is versatile and handles different data structures automatically based on the content and the model's requirements:
+
+1.  **Single Image (S2 Only or S1+S2):** Point to a `.SAFE` directory (e.g., `S2B_MSIL2A_...SAFE`) OR a directory containing exactly one S2 `.SAFE` product (and optionally an S1 product).
+    *   *System Logic:* The system counts the number of S2 products (`S2*.SAFE`) in the folder. If count is 1, it treats it as a single time-step. If an S1 product is required (e.g., for `resnet_all`), the adapter looks for it in the same folder or relative to the S2 product.
+
+2.  **Multi-Temporal Series:** Point to a folder *containing multiple* S2 `.SAFE` directories.
+    *   *System Logic:* If multiple S2 products are found AND the selected model (e.g., `prithvi`) requires multiple frames (`num_frames > 1`), the system automatically loads them as a time series.
 
 ## Available Models
 

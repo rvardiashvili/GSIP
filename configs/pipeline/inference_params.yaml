@@ -1,5 +1,6 @@
 # @package _global_
 pipeline:
+  disable_progress_bar: false
   tiling:
     # The exact output dimensions we want per write operation (Zone of Responsibility)
     zone_of_responsibility_size: "auto" 

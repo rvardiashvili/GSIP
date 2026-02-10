@@ -68,7 +68,7 @@ def wait_for_gpu_cooldown(target_temp: int, poll_interval: int = 2):
                 return
 
             # Print status every 5 seconds roughly
-            if int(time.time()) % 5 == 0:
+            if int(time.time()) % 5 == 0 and sys.stdout.isatty():
                 print(f"   ... cooling ... {temp}°C", end="\r", flush=True)
 
             time.sleep(poll_interval)
@@ -90,14 +90,11 @@ def run_benchmark_suite(
     """
 
     output_base = Path(output_base).resolve()
-    central_results_dir = output_base / "consolidated_results"
-    central_results_dir.mkdir(exist_ok=True, parents=True)
 
     log.info("=========================================")
     log.info("   GSIP NEW BENCHMARK SUITE STARTED")
     log.info("=========================================")
     log.info(f"Output Base: {output_base}")
-    log.info(f"Consolidated Results: {central_results_dir}")
     log.info(f"Benchmarks to Run: {len(benchmark_configs)}")
 
     initial_gpu_temp = get_gpu_temperature()
@@ -147,6 +144,7 @@ def run_benchmark_suite(
             f"model={model_name}",
             # Force enable benchmarking flags just in case
             "pipeline.output.save_preview=true",
+            "pipeline.disable_progress_bar=true", # Disable progress bars to keep logs clean
         ] + config_overrides  # Append config overrides
 
         log.info(f"Executing: {' '.join(cmd)}")
@@ -179,20 +177,6 @@ def run_benchmark_suite(
                         "path": str(run_output),
                     }
                 )
-
-                # Copy artifacts to centralized folder
-                try:
-                    for json_file in run_output.glob("benchmark_*.json"):
-                        dest_name = f"{run_label}_{timestamp}_{json_file.name}"
-                        shutil.copy(json_file, central_results_dir / dest_name)
-
-                    for png_file in run_output.glob("*.png"):
-                        dest_name = f"{run_label}_{timestamp}_{png_file.name}"
-                        shutil.copy(png_file, central_results_dir / dest_name)
-
-                    log.info(f"   Artifacts copied to {central_results_dir}")
-                except Exception as e:
-                    log.error(f"   Failed to copy artifacts: {e}")
 
             else:
                 log.error(f"FAILURE: {run_label} failed with code {process.returncode}")

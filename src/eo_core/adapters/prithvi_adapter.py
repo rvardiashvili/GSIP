@@ -337,11 +337,11 @@ class PrithviAdapter(BaseAdapter):
                 input_shape = (self.num_bands, self.patch_size, self.patch_size)
                 
             batch_size = estimate_optimal_batch_size(model, input_shape, device)
-            print(f"Auto-configured batch size: {batch_size}")
+            log.info(f"Auto-configured batch size: {batch_size}")
 
         return MetadataPassingWrapper(model, batch_size, norm_m, norm_s, device, activation='softmax')
 
-    def preprocess(self, raw_input: Dict[str, Any]) -> Tuple[np.ndarray, Dict[str, Any]]:
+    def preprocess(self, raw_input: Dict[str, Any]) -> Tuple[List[np.ndarray], Dict[str, Any]]:
         t_start = time.perf_counter()
         tile_folder = raw_input['tile_folder'] # Can be Path or List[Path]
         r = raw_input['r_start']

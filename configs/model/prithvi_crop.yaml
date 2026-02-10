@@ -17,16 +17,7 @@ model:
       # The config fetched above says 18 channels (3 timestamps).
       
       bands: ['B02', 'B03', 'B04', 'B8A', 'B11', 'B12']
-      
-      # Means/Stds from the file (divided by 10000 to match reflectance 0-1 range if necessary, 
-      # but these values [494, 815...] look like raw integers. 
-      # If our pipeline normalizes 0-1 first, we need to adjust.)
-      # WAIT: The pipeline data loader converts >100 to 0-1 float.
-      # If these means are 494, they expect Raw DNs? 
-      # Or maybe we shouldn't normalize to 0-1 in adapter?
-      # Let's stick to the Prithvi Standard: 
-      # If these means are ~500, they are definitely DNs (0-10000).
-      
+
       means: [0.0492, 0.0763, 0.0886, 0.2844, 0.2227, 0.1415] 
       stds:  [0.0468, 0.0503, 0.0734, 0.1245, 0.1102, 0.0885]
       

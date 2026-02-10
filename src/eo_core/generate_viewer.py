@@ -2,13 +2,16 @@ import os
 import json
 import argparse
 import glob
+import logging
+
+log = logging.getLogger(__name__)
 
 def generate_viewer(output_dir):
     """
     Generates a main index HTML viewer for the BigEarthNet v2.0 analysis results,
     aggregating stats from all found tiles.
     """
-    print(f"Generating main viewer for directory: {output_dir}")
+    log.info(f"Generating main viewer for directory: {output_dir}")
     
     # Find all subdirectories in the output directory that seem to be tile results
     tile_dirs = []
@@ -50,7 +53,7 @@ def generate_viewer(output_dir):
                                 if 'gpu_util_percent' in sys_stats:
                                     stats['gpu'] = f"{sys_stats['gpu_util_percent'].get('mean', 0):.1f}%"
                         except Exception as e:
-                            print(f"Error reading stats for {d}: {e}")
+                            log.warning(f"Error reading stats for {d}: {e}")
                     
                     tile_stats.append(stats)
 
@@ -58,9 +61,9 @@ def generate_viewer(output_dir):
                     try:
                         generate_single_node_viewer(d, output_dir)
                     except Exception as e:
-                        print(f"Error generating single viewer for tile {d}: {e}")
+                        log.error(f"Error generating single viewer for tile {d}: {e}")
 
-    print(f"Found {len(tile_dirs)} tile directories.")
+    log.info(f"Found {len(tile_dirs)} tile directories.")
 
     # Sort tiles by name
     tile_stats.sort(key=lambda x: x['name'])
@@ -174,14 +177,14 @@ def generate_viewer(output_dir):
     viewer_path = os.path.join(output_dir, 'viewer.html')
     with open(viewer_path, 'w') as f:
         f.write(html_content)
-    print(f"Viewer generated at: {os.path.abspath(viewer_path)}")
+    log.info(f"Viewer generated at: {os.path.abspath(viewer_path)}")
 
 
 def generate_single_node_viewer(tile_name, output_dir):
     """
     Generates an HTML viewer for a single BigEarthNet v2.0 analysis result.
     """
-    print(f"Generating single node viewer for tile: {tile_name}")
+    log.info(f"Generating single node viewer for tile: {tile_name}")
     tile_dir = os.path.join(output_dir, tile_name)
     
     # 1. Load Benchmark Data
@@ -192,7 +195,7 @@ def generate_single_node_viewer(tile_name, output_dir):
             with open(bench_files[-1], 'r') as f:
                 bench_data = json.load(f)
         except Exception as e:
-            print(f"Warning: Could not load benchmark data: {e}")
+            log.warning(f"Warning: Could not load benchmark data: {e}")
 
     # 2. Load Global Probs
     probs_file = os.path.join(tile_dir, f"{tile_name}_global_probs.json")
@@ -203,7 +206,7 @@ def generate_single_node_viewer(tile_name, output_dir):
                 d = json.load(f)
                 global_probs = d.get('global_probs', [])
         except Exception as e:
-            print(f"Warning: Could not load global probs: {e}")
+            log.warning(f"Warning: Could not load global probs: {e}")
             
     # 3. Load Classmap (for legends and labels)
     classmap_file = os.path.join(tile_dir, f"{tile_name}_classmap.json")
@@ -213,7 +216,7 @@ def generate_single_node_viewer(tile_name, output_dir):
             with open(classmap_file, 'r') as f:
                 class_map = json.load(f)
         except Exception as e:
-            print(f"Warning: Could not load classmap: {e}")
+            log.warning(f"Warning: Could not load classmap: {e}")
 
     # Determine Labels for Probs
     # Strategy 1: Use labels from classmap (Dynamic/Model-Agnostic)
@@ -511,16 +514,4 @@ def generate_single_node_viewer(tile_name, output_dir):
     os.makedirs(os.path.dirname(viewer_path), exist_ok=True)
     with open(viewer_path, 'w') as f:
         f.write(html_content)
-    print(f"Viewer generated at: {os.path.abspath(viewer_path)}")
-
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Generate an HTML viewer for BigEarthNet v2.0 analysis results.')
-    parser.add_argument('--output_dir', type=str, default='out', help='Path to the output directory.')
-    parser.add_argument('--tile_name', type=str, help='Name of the tile for single node viewer.')
-    args = parser.parse_args()
-    
-    if args.tile_name:
-        generate_single_node_viewer(args.tile_name, args.output_dir)
-    else:
-        generate_viewer(args.output_dir)
+    log.info(f"Viewer generated at: {os.path.abspath(viewer_path)}")

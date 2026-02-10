@@ -99,7 +99,11 @@ def writer_process(
     patch_weight = np.outer(window_1d, window_1d).astype(np.float32)
     patch_weight = patch_weight[np.newaxis, :, :]  # (1, P, P)
 
-    pbar = tqdm(total=total_chunks, desc="Writing  ", position=1, leave=True)
+    # Check for progress bar disable flag
+    pipeline_conf = context.get('config', {}).get('pipeline', {})
+    disable_pbar = pipeline_conf.get('disable_progress_bar', False)
+
+    pbar = tqdm(total=total_chunks, desc="Writing  ", position=1, leave=True, disable=disable_pbar)
 
     try:
         while True:
@@ -192,7 +196,7 @@ def writer_process(
             pbar.update(1)
 
     except Exception as e:
-        print(f"CRITICAL ERROR IN WRITER PROCESS: {e}", file=sys.stderr)
+        log.critical(f"CRITICAL ERROR IN WRITER PROCESS: {e}")
         import traceback
 
         traceback.print_exc()
@@ -574,7 +578,8 @@ def main_hydra(cfg: DictConfig):
                 log.error(f"Synchronous error: {e}")
                 return None
 
-    inference_pbar = tqdm(total=total_chunks, desc="Inference", position=0, leave=True)
+    disable_pbar = cfg.pipeline.get('disable_progress_bar', False)
+    inference_pbar = tqdm(total=total_chunks, desc="Inference", position=0, leave=True, disable=disable_pbar)
 
     try:
         while True:

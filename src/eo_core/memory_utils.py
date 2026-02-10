@@ -178,7 +178,7 @@ def resolve_zor(zor_config: Union[int, str], pipeline_cfg: Any, **kwargs) -> int
     kwargs should contain num_bands, num_classes, patch_size, stride_ratio, is_segmentation, max_ram_gb.
     """
     if isinstance(zor_config, str) and zor_config.lower() == "auto":
-        print("🧠 Auto-calculating Chunk Size based on available RAM...")
+        log.info("Auto-calculating Chunk Size based on available RAM...")
         return calculate_optimal_zor(pipeline_cfg=pipeline_cfg, **kwargs)
     elif isinstance(zor_config, int):
         return zor_config
@@ -187,7 +187,7 @@ def resolve_zor(zor_config: Union[int, str], pipeline_cfg: Any, **kwargs) -> int
             return int(zor_config)
         except:
             patch_size = kwargs.get("patch_size", 120)
-            print(f"⚠️ Invalid ZoR config, defaulting to {patch_size * 10}")
+            log.warning(f"Invalid ZoR config, defaulting to {patch_size * 10}")
             return patch_size * 10
 
 
