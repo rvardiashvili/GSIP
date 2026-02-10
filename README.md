@@ -23,22 +23,26 @@ pip install -r src/requirements.txt
 pip install -e .
 ```
 
-### 2. Run a Model
+### 2. Run a Model (CLI)
 
-**Sentinel-2 Classification (ResNet-50):**
 ```bash
 python src/main.py model=resnet_s2 input_path=/path/to/tile output_path=./out
 ```
 
-**Flood Segmentation (Prithvi-100M):**
+### 3. GSIP Studio (GUI Analysis)
+
+The project includes a native GTK4 dashboard for deep performance analysis and visualization of benchmark results.
+
 ```bash
-python src/main.py model=prithvi_segmentation input_path=/path/to/tile output_path=./out
+python gtk_client/main.py
 ```
 
 ## Key Features
 
+-   **GSIP Studio:** A native GTK4 desktop client with interactive, synchronized resource usage charts (Memory/GPU), automated legend generation, and spatial uncertainty mapping.
 -   **Multi-Model Support:** Easily switch between ResNet, ConvNeXt, and Segmentation models via Config Adapters.
 -   **Scalable Tiling:** Processes massive images using an artifact-free Overlap-Tile strategy.
 -   **Smart Memory Management:** Automatically calculates safe processing chunk sizes based on available RAM.
--   **High-Performance Architecture:** Features a **List-of-Views** memory optimization for zero-copy patch processing, drastically reducing RAM usage.
+-   **High-Performance Architecture:** Features a **List-of-Views** memory optimization for zero-copy patch processing.
+-   **Advanced Benchmarking:** Automated suite with GPU cooldown management and interactive global performance comparisons.
 -   **Uncertainty Quantification:** Outputs Entropy and Confidence maps.

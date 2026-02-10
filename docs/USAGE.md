@@ -1,8 +1,25 @@
 # Usage Guide
 
-This guide explains how to run the GeoSpatial Inference Pipeline (GSIP) using the available model configurations.
+This guide explains how to run the GeoSpatial Inference Pipeline (GSIP) using the available model configurations and how to analyze results using GSIP Studio.
 
-## Basic Command Structure
+## GSIP Studio (Desktop GUI)
+
+GSIP Studio is a native GTK4 application for visualizing and comparing benchmark results.
+
+### Features
+*   **Performance Monitoring:** Interactive charts for Memory (RAM) and GPU utilization.
+*   **Synchronized Hovers:** Hovering over one chart highlights the same timestamp on all others.
+*   **Spatial Analysis:** View classification maps, confidence, and entropy side-by-side with automated legends.
+*   **Global Comparison:** Compare peak memory and duration across all your benchmark runs.
+*   **Export:** Package benchmark results (JSONs and images) into a ZIP archive for sharing.
+
+### Launching the Studio
+```bash
+python gtk_client/main.py
+```
+By default, the Studio looks for results in `out/benchmarks_final`. You can change the root folder using the file picker in the sidebar.
+
+## Basic Command Structure (CLI)
 
 The general command to run the pipeline is:
 
@@ -103,7 +120,10 @@ The JSON file should follow this structure:
     *   `label` (Optional): A custom name for this run folder.
     *   `config_overrides` (Optional): A list of Hydra override strings (e.g., changing memory limits or patch sizes).
 
-This script orchestrates back-to-back runs, manages GPU cooldowns to ensure fair comparisons, and generates a consolidated report folder containing performance metrics and artifacts from all runs.
+This script orchestrates back-to-back runs, manages GPU cooldowns to ensure fair comparisons, and stores artifacts in per-run directories (e.g., `out/benchmarks_final/label/timestamp/`).
+
+**Analysis:**
+While the script prints a summary table to the console, it is highly recommended to use **GSIP Studio** to visualize the time-series resource usage and spatial outputs of these benchmarks.
 
 ## Advanced Configuration: Reporters
 
