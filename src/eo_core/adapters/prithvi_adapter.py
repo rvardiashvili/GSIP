@@ -368,56 +368,58 @@ class PrithviAdapter(BaseAdapter):
              s2_data = s2_data.astype(np.float32) / 10000.0
         
         patches, coords, H_crop, W_crop, _ = cut_into_patches(s2_data, self.patch_size, stride=self.stride)
-        # patches shape: (N, Channels_Stacked, H, W)
+        # patches is List[np.ndarray], each shape (Channels_Stacked, P, P)
         
         # Handle Temporal Dimension
         backbone_params = self.params.get('backbone_params', {})
         num_frames = backbone_params.get('num_frames', 1)
         num_bands = len(bands_needed)
         
-        current_channels = patches.shape[1]
+        if not patches:
+             return patches, {}
+
+        current_channels = patches[0].shape[0]
         
-        if current_channels == num_bands and num_frames > 1:
-            # Case 1: Single Image Input, Model expects Time Series -> REPLICATE
-            # patches: (N, C, H, W) -> (N, C, T, H, W)
-            patches = np.expand_dims(patches, axis=2) # (N, C, 1, H, W)
-            patches = np.repeat(patches, num_frames, axis=2) # (N, C, T, H, W)
+        transformed_patches = []
+        
+        for p in patches:
+            # p shape: (Current_Channels, H, W)
             
-        elif current_channels > num_bands:
-            # Case 2: Multi-Temporal Input (Real Data)
-            # patches: (N, T*C, H, W) -> Reshape to (N, C, T, H, W)
-            # Note: _read_s2 stacks as T1_C1, T1_C2... T2_C1... if recursive?
-            # Wait, my `_read_s2` implementation:
-            # for folder: data = read(C,H,W); stack.append(data)
-            # concat(stack, axis=0) -> (T*C, H, W) structure:
-            # [T1_B1, T1_B2... T1_B6, T2_B1... T2_B6, ...]
-            # So channel dimension is T*C.
-            # We want (C, T).
-            # Current flat layout: T is outer block, C is inner.
-            # Reshape to (N, T, C, H, W)
-            real_T = current_channels // num_bands
-            patches = patches.reshape(patches.shape[0], real_T, num_bands, self.patch_size, self.patch_size)
-            # Permute to (N, C, T, H, W)
-            patches = patches.transpose(0, 2, 1, 3, 4)
+            if current_channels == num_bands and num_frames > 1:
+                # Case 1: Single Image Input, Model expects Time Series -> REPLICATE
+                # p: (C, H, W) -> (C, T, H, W)
+                p = np.expand_dims(p, axis=1) # (C, 1, H, W)
+                p = np.repeat(p, num_frames, axis=1) # (C, T, H, W)
+                
+            elif current_channels > num_bands:
+                # Case 2: Multi-Temporal Input (Real Data)
+                # p: (T*C, H, W) -> Reshape to (C, T, H, W)
+                real_T = current_channels // num_bands
+                
+                # Reshape to (T, C, H, W) first
+                p = p.reshape(real_T, num_bands, self.patch_size, self.patch_size)
+                
+                # Permute to (C, T, H, W)
+                p = p.transpose(1, 0, 2, 3)
+                
+                # Handle T mismatch
+                if real_T != num_frames:
+                    if real_T > num_frames:
+                        p = p[:, :num_frames, :, :]
+                    else:
+                        diff = num_frames - real_T
+                        last_frame = p[:, -1:, :, :]
+                        padding = np.repeat(last_frame, diff, axis=1)
+                        p = np.concatenate([p, padding], axis=1)
             
-            # If loaded T != num_frames, handle mismatch?
-            if real_T != num_frames:
-                log.warning(f"Input time steps ({real_T}) != Model expected ({num_frames}). Truncating/Padding.")
-                if real_T > num_frames:
-                    patches = patches[:, :, :num_frames, :, :]
-                else:
-                    # Pad by repeating last frame
-                    diff = num_frames - real_T
-                    last_frame = patches[:, :, -1:, :, :]
-                    padding = np.repeat(last_frame, diff, axis=2)
-                    patches = np.concatenate([patches, padding], axis=2)
+            transformed_patches.append(p)
 
         metadata = {
             'coords': coords, 'H_crop': H_crop, 'W_crop': W_crop,
             'original_r': r, 'original_c': c, 'shape': s2_data.shape,
             'original_folder': tile_folder if not isinstance(tile_folder, list) else tile_folder[0]
         }
-        return patches, metadata
+        return transformed_patches, metadata
 
     def postprocess(self, model_output: Tuple[torch.Tensor, Dict[str, Any]]) -> Dict[str, Any]:
         probs_tensor, metadata = model_output

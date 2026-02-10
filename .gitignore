@@ -118,3 +118,4 @@ latex_thesis/
 bremen_analyzed/
 
 local only/
+local_benchmark_config.json

@@ -4,6 +4,8 @@ import sys
 import logging
 import os
 import shutil
+import json
+import argparse
 from pathlib import Path
 from datetime import datetime
 
@@ -215,54 +217,47 @@ def run_benchmark_suite(
 
 
 if __name__ == "__main__":
-    # CONFIGURATION
-
-    # 1. Define placeholder paths for different input types
-    S2_SINGLE_TEMPORAL_PATH = Path(
-        "/home/rati/extra/work/inputs/hamburg/S2B_MSIL2A_20250612T102559_N0511_R108_T32UNE_20250612T131505.SAFE"
+    parser = argparse.ArgumentParser(description="Run GSIP Benchmark Suite")
+    parser.add_argument(
+        "--config",
+        type=str,
+        default="benchmark_config.json",
+        help="Path to the benchmark configuration JSON file (default: benchmark_config.json)",
     )
-    S1_S2_GROUP_PATH = Path("/home/rati/extra/work/inputs/hamburg")
-    S2_MULTI_TEMPORAL_PATH = Path("/home/rati/extra/work/inputs/hamburg_series")
+    args = parser.parse_args()
 
-    # 2. Define Output Location
-    OUTPUT_DIR = "out/benchmarks_final"
+    config_path = Path(args.config)
 
-    # 3. Define Models to Test with specific input paths and config overrides
-    BENCHMARK_CONFIGS = [
-        {
-            "name": "resnet_s2",
-            "input_path": S2_SINGLE_TEMPORAL_PATH,
-            "config_overrides": ["+pipeline.tiling.max_memory_gb=8"],
-        },
-        {
-            "name": "resnet_all",
-            "input_path": S1_S2_GROUP_PATH,
-            "config_overrides": [
-                "data_source.use_sentinel_1=True",
-                "+pipeline.tiling.max_memory_gb=8",
+    if not config_path.exists():
+        log.error(f"Configuration file not found: {config_path}")
+        log.info("Please provide a valid JSON configuration file using --config.")
+        log.info("Example structure:")
+        example_conf = {
+            "output_dir": "out/benchmarks_final",
+            "benchmarks": [
+                {
+                    "name": "resnet_s2",
+                    "input_path": "/path/to/input.SAFE",
+                    "label": "optional_label",
+                    "config_overrides": ["+pipeline.tiling.max_memory_gb=8"],
+                }
             ],
-        },
-        {
-            "name": "convnext_s2",
-            "input_path": S2_MULTI_TEMPORAL_PATH,
-            "config_overrides": ["+pipeline.tiling.max_memory_gb=8"],
-        },
-        {
-            "name": "prithvi_crop",
-            "input_path": S2_MULTI_TEMPORAL_PATH,
-            "config_overrides": ["+pipeline.tiling.max_memory_gb=8"],
-        },
-        # Add a specific ResNet model for naive tiling test
-        {
-            "name": "resnet_s2",
-            "input_path": S2_SINGLE_TEMPORAL_PATH,
-            "label": "resnet_s2_naive_tiling",
-            "config_overrides": [
-                "pipeline.tiling.patch_size=256",
-                "pipeline.tiling.patch_stride=256",
-                "+pipeline.tiling.max_memory_gb=8",
-            ],
-        },
-    ]
+        }
+        print(json.dumps(example_conf, indent=2))
+        sys.exit(1)
 
-    run_benchmark_suite(OUTPUT_DIR, BENCHMARK_CONFIGS)
+    try:
+        with open(config_path, "r") as f:
+            suite_config = json.load(f)
+    except Exception as e:
+        log.error(f"Failed to parse configuration file: {e}")
+        sys.exit(1)
+
+    output_dir = suite_config.get("output_dir", "out/benchmarks_final")
+    benchmark_configs = suite_config.get("benchmarks", [])
+
+    if not benchmark_configs:
+        log.warning("No benchmarks defined in configuration file.")
+        sys.exit(0)
+
+    run_benchmark_suite(output_dir, benchmark_configs)

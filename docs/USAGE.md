@@ -47,13 +47,54 @@ python src/main.py model=prithvi_segmentation input_path=/path/to/S2_tile output
 
 ## Benchmarking Mode
 
-To run a comprehensive performance benchmark suite across multiple models and configurations:
+To run a comprehensive performance benchmark suite across multiple models and configurations, use the `src/benchmark_suite.py` script.
+
+### Using a Configuration File
+
+The benchmark suite is controlled by a JSON configuration file. By default, it looks for `benchmark_config.json` in the root directory.
 
 ```bash
 python src/benchmark_suite.py
 ```
 
-This script orchestrates back-to-back runs, manages GPU cooldowns, and generates a consolidated report folder in `out/benchmarks_final/consolidated_results` containing performance metrics and artifacts.
+To specify a custom configuration file:
+
+```bash
+python src/benchmark_suite.py --config my_custom_benchmarks.json
+```
+
+### Configuration Format
+
+The JSON file should follow this structure:
+
+```json
+{
+  "output_dir": "out/benchmarks_final",
+  "benchmarks": [
+    {
+      "name": "resnet_s2",
+      "input_path": "/path/to/S2_tile.SAFE",
+      "label": "resnet_s2_baseline",
+      "config_overrides": [
+        "+pipeline.tiling.max_memory_gb=16"
+      ]
+    },
+    {
+      "name": "convnext_s2",
+      "input_path": "/path/to/S2_tile.SAFE"
+    }
+  ]
+}
+```
+
+*   `output_dir`: Where the results for all runs will be stored.
+*   `benchmarks`: A list of run configurations.
+    *   `name`: The model configuration name (must match a file in `configs/model/`, e.g., `resnet_s2`).
+    *   `input_path`: Path to the input tile or folder.
+    *   `label` (Optional): A custom name for this run folder.
+    *   `config_overrides` (Optional): A list of Hydra override strings (e.g., changing memory limits or patch sizes).
+
+This script orchestrates back-to-back runs, manages GPU cooldowns to ensure fair comparisons, and generates a consolidated report folder containing performance metrics and artifacts from all runs.
 
 ## Advanced Configuration: Reporters
 

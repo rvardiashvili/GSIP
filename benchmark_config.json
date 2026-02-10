@@ -1,0 +1,13 @@
+{
+  "output_dir": "out/benchmarks",
+  "benchmarks": [
+    {
+      "name": "resnet_s2",
+      "input_path": "/path/to/sentinel2/product.SAFE",
+      "label": "resnet_s2_example",
+      "config_overrides": [
+        "+pipeline.tiling.max_memory_gb=8"
+      ]
+    }
+  ]
+}
