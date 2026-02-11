@@ -246,6 +246,10 @@ class AnalysisPage(Gtk.Paned):
             
         meta = data.get('meta', {})
         sys_stats = data.get('system_stats', {})
+        model_config = data.get('model_config', {})
+        system_info = data.get('system', {})
+        pipeline_stats = data.get('pipeline_stats', {})
+        full_config = data.get('full_config', {})
         
         # 1. Header
         try:
@@ -272,7 +276,58 @@ class AnalysisPage(Gtk.Paned):
         header_box.append(dur_lbl)
         self.detail_box.append(header_box)
         
-        # 2. Key Metrics Grid (Native System Monitor Style)
+        self.detail_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+
+        # 2. System & Config Info (Expander)
+        expander = Gtk.Expander(label="System & Model Configuration")
+        info_grid = Gtk.Grid(column_spacing=20, row_spacing=10)
+        info_grid.set_margin_top(10)
+        info_grid.set_margin_bottom(10)
+        
+        # Helper for grid rows
+        def add_info_row(row_idx, label, value):
+            l = Gtk.Label(label=label, xalign=0)
+            l.add_css_class("dim-label")
+            v = Gtk.Label(label=str(value), xalign=0)
+            info_grid.attach(l, 0, row_idx, 1, 1)
+            info_grid.attach(v, 1, row_idx, 1, 1)
+
+        row = 0
+        add_info_row(row, "OS:", f"{system_info.get('os')} {system_info.get('os_release')}")
+        row += 1
+        add_info_row(row, "CPU:", f"{system_info.get('cpu_count_logical')} Cores (Physical: {system_info.get('cpu_count_physical')})")
+        row += 1
+        add_info_row(row, "RAM:", f"{system_info.get('ram_total_gb')} GB")
+        row += 1
+        add_info_row(row, "GPU:", system_info.get('gpu_name', 'Unknown'))
+        row += 1
+        add_info_row(row, "Adapter:", model_config.get('adapter_class'))
+        row += 1
+        add_info_row(row, "Patch Size:", model_config.get('patch_size'))
+        row += 1
+        add_info_row(row, "Stride:", model_config.get('stride'))
+        row += 1
+        add_info_row(row, "Batch Size:", model_config.get('gpu_batch_size'))
+        row += 1
+
+        # Extra info from full_config
+        if full_config:
+            pipe_cfg = full_config.get('pipeline', {})
+            tiling_cfg = pipe_cfg.get('tiling', {})
+            dist_cfg = pipe_cfg.get('distributed', {})
+            
+            max_mem = tiling_cfg.get('max_memory_gb', 'N/A')
+            add_info_row(row, "Max Memory Set:", f"{max_mem} GB")
+            row += 1
+            
+            engine = dist_cfg.get('engine', 'N/A')
+            add_info_row(row, "Dist. Engine:", engine)
+            row += 1
+
+        expander.set_child(info_grid)
+        self.detail_box.append(expander)
+        
+        # 3. Key Metrics Grid
         grid = Gtk.Grid(column_spacing=40, row_spacing=15)
         
         def add_stat(label, val, row, col):
@@ -289,15 +344,42 @@ class AnalysisPage(Gtk.Paned):
         add_stat("Max Memory", f"{proc_ram} GB", 0, 0)
         
         gpu = sys_stats.get('gpu_util_percent', {}).get('mean', 'N/A')
-        add_stat("Avg GPU", f"{gpu}%", 0, 1)
+        val_gpu = f"{gpu:.1f}%" if isinstance(gpu, (int, float)) else str(gpu)
+        add_stat("Avg GPU", val_gpu, 0, 1)
         
         cpu = sys_stats.get('cpu_percent', {}).get('mean', 'N/A')
-        add_stat("Avg CPU", f"{cpu}%", 0, 2)
+        val_cpu = f"{cpu:.1f}%" if isinstance(cpu, (int, float)) else str(cpu)
+        add_stat("Avg CPU", val_cpu, 0, 2)
+
+        gpu_mem = sys_stats.get('gpu_mem_used_gb', {}).get('max', 'N/A')
+        add_stat("Max GPU Mem", f"{gpu_mem} GB", 1, 0)
+        
+        gpu_temp = sys_stats.get('gpu_temp_c', {}).get('max', 'N/A')
+        add_stat("Max GPU Temp", f"{gpu_temp} °C", 1, 1)
         
         self.detail_box.append(grid)
         self.detail_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
         
-        # 3. Native Time Series Charts
+        # 4. Pipeline Stats
+        if pipeline_stats:
+            lbl = Gtk.Label(label="Pipeline Performance", xalign=0)
+            lbl.add_css_class("heading")
+            self.detail_box.append(lbl)
+
+            # Chart
+            pipe_labels = ["Preprocess", "Inference", "Wait Prefetch", "Wait Writer"]
+            pipe_keys = ["cpu_preprocess_duration", "gpu_inference_duration", "wait_for_prefetch_duration", "wait_for_writer_queue_duration"]
+            pipe_vals = []
+            
+            for k in pipe_keys:
+                pipe_vals.append(pipeline_stats.get(k, {}).get('mean', 0))
+                
+            pipe_chart = NativeBarChart("Avg Stage Duration", "s", color=(0.5, 0.3, 0.8))
+            pipe_chart.set_data(pipe_labels, pipe_vals)
+            self.detail_box.append(pipe_chart)
+            self.detail_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+        
+        # 5. Native Time Series Charts
         ts_data = data.get('time_series', [])
         if ts_data:
             lbl = Gtk.Label(label="Resource Usage History", xalign=0)
@@ -307,27 +389,59 @@ class AnalysisPage(Gtk.Paned):
             chart_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20)
             chart_box.set_hexpand(True)
             
+            # Extract common timestamps
+            timestamps = [x['timestamp'] for x in ts_data]
+            all_charts = []
+
             # RAM Chart
-            ram_points = [(x['timestamp'], x.get('process_ram_used_gb', 0)) for x in ts_data]
-            chart_ram = NativeChart("Memory", "GB", color=(0.2, 0.6, 1.0))
+            ram_points = [(t, x.get('process_ram_used_gb', 0)) for t, x in zip(timestamps, ts_data)]
+            chart_ram = NativeChart("Process Memory", "GB", color=(0.2, 0.6, 1.0))
             chart_ram.set_data(ram_points)
             chart_box.append(chart_ram)
+            all_charts.append(chart_ram)
             
-            # GPU Chart
+            # CPU Chart
+            if 'cpu_percent' in ts_data[0]:
+                cpu_points = [(t, x.get('cpu_percent', 0)) for t, x in zip(timestamps, ts_data)]
+                chart_cpu = NativeChart("CPU Utilization", "%", color=(0.9, 0.4, 0.2))
+                chart_cpu.set_data(cpu_points)
+                chart_box.append(chart_cpu)
+                all_charts.append(chart_cpu)
+
+            # GPU Util Chart
             if 'gpu_util_percent' in ts_data[0]:
-                gpu_points = [(x['timestamp'], x.get('gpu_util_percent', 0)) for x in ts_data]
+                gpu_points = [(t, x.get('gpu_util_percent', 0)) for t, x in zip(timestamps, ts_data)]
                 chart_gpu = NativeChart("GPU Utilization", "%", color=(0.2, 0.8, 0.4))
                 chart_gpu.set_data(gpu_points)
                 chart_box.append(chart_gpu)
+                all_charts.append(chart_gpu)
+
+            # GPU Memory Chart
+            if 'gpu_mem_used_gb' in ts_data[0]:
+                gpu_mem_points = [(t, x.get('gpu_mem_used_gb', 0)) for t, x in zip(timestamps, ts_data)]
+                chart_gpu_mem = NativeChart("GPU Memory", "GB", color=(0.4, 0.2, 0.8))
+                chart_gpu_mem.set_data(gpu_mem_points)
+                chart_box.append(chart_gpu_mem)
+                all_charts.append(chart_gpu_mem)
+
+            # GPU Temp Chart
+            if 'gpu_temp_c' in ts_data[0]:
+                gpu_temp_points = [(t, x.get('gpu_temp_c', 0)) for t, x in zip(timestamps, ts_data)]
+                chart_temp = NativeChart("GPU Temperature", "°C", color=(0.8, 0.2, 0.2))
+                chart_temp.set_data(gpu_temp_points)
+                chart_box.append(chart_temp)
+                all_charts.append(chart_temp)
                 
-                # Sync them
-                chart_ram.sync_with(chart_gpu)
-                chart_gpu.sync_with(chart_ram)
+            # Sync all charts
+            for c1 in all_charts:
+                for c2 in all_charts:
+                    if c1 != c2:
+                        c1.sync_with(c2)
             
             self.detail_box.append(chart_box)
             self.detail_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
 
-        # 4. Maps Dashboard (Native Viewers)
+        # 6. Maps Dashboard (Native Viewers)
         classmap_path = list(path.parent.glob("*_classmap.json"))
         classmap_data = {}
         if classmap_path:

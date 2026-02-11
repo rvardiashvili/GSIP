@@ -20,6 +20,7 @@ class Benchmarker:
         self.samples = []
         self.events = {}
         self.model_config = {}
+        self.full_config = {}
         self.system_info = self._get_system_info()
         self.start_time = None
         self.end_time = None
@@ -55,6 +56,9 @@ class Benchmarker:
 
     def set_model_config(self, config: dict):
         self.model_config = config
+
+    def set_full_config(self, config: dict):
+        self.full_config = config
 
     def start(self):
         self.running = True
@@ -162,6 +166,7 @@ class Benchmarker:
             },
             "system": self.system_info,
             "model_config": self.model_config,
+            "full_config": self.full_config,
             "pipeline_stats": event_stats,
             "system_stats": metric_stats,
             "time_series": self.samples

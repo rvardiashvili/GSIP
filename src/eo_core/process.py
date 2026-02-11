@@ -506,6 +506,7 @@ def main_hydra(cfg: DictConfig):
         "writer_queue_size": writer_queue_size,
     }
     benchmarker.set_model_config(bench_config)
+    benchmarker.set_full_config(OmegaConf.to_container(cfg, resolve=True))
     benchmarker.start()
 
     # --- Initialize Input Stream ---
