@@ -19,7 +19,10 @@ class GSIPApp(Gtk.Application):
             win = MainWindow(self)
         win.present()
 
-if __name__ == "__main__":
+def main():
     app = GSIPApp()
     exit_status = app.run(sys.argv)
     sys.exit(exit_status)
+
+if __name__ == "__main__":
+    main()

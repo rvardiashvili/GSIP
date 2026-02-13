@@ -98,18 +98,21 @@ $$ \text{Chunk}_{dim} = \text{ZoR}_{dim} + 2 \cdot \text{Halo}_{pixels} $$
 *   **Halo Size:** Must be $\ge \frac{ERF}{2}$. For ResNet-50, typical ERF suggests a halo of ~128 pixels is safe.
 
 #### 3.1.1 Memory Auto-Configuration
-The system implements a rigorous memory model to calculate the safe ZoR size. This is managed by the `resolve_zor` function in `src/eo_core/process.py`, which leverages `calculate_optimal_zor` from `src/eo_core/memory_utils.py`. 
+The system implements a rigorous memory model to calculate the safe ZoR size. This is managed by the `resolve_zor` function in `src/eo_core/process.py`, which leverages `calculate_optimal_zor` from `src/eo_core/memory_utils.py`.
+
+**Safety Buffer:**
+Instead of a simple percentage safety factor, the system now reserves a fixed **Safety Buffer** (default: 1.0 GB) from the available system RAM. This ensures a consistent headroom for the OS and background processes regardless of total memory size.
 
 **Optimization: List-of-Views Architecture**
 Previously, processing overlapping patches required duplicating memory (4x expansion for 50% overlap). The pipeline now uses a **List of Views** strategy, where patches are zero-copy references to the original input chunk. This drastically reduces the memory footprint.
 
 The formula accounts for:
-$$ BPP_{total} = BPP_{patches} + BPP_{logits} + BPP_{recon} + BPP_{metrics} + BPP_{io} + 800_{overhead} $$
+$$ BPP_{total} = BPP_{patches} + BPP_{logits} + BPP_{recon} + BPP_{metrics} + BPP_{io} + 300_{overhead} $$
 
 *   **Patches:** Weighted by the `prefetch_queue_size`. Thanks to the View optimization, this is now `num_bands * 4 bytes` (no overlap factor).
 *   **Logits:** The largest variable. For **Segmentation**, this is a full 4D map ($N \times C \times P \times P$).
 *   **Metrics:** Buffers for Entropy, Confidence, and Gap are only allocated if enabled in the config.
-*   **Writer Overhead:** An additional safety margin (500 BPP) is added to account for GDAL/Rasterio internal buffering.
+*   **Writer Overhead:** An additional safety margin (300 BPP) is added to account for GDAL/Rasterio internal buffering.
 
 ### 3.1.2 Optimal GPU Batch Size
 

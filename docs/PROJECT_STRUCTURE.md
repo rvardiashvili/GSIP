@@ -3,13 +3,13 @@
 This document outlines the directory layout and purpose of key files in the **GeoSpatial Inference Pipeline (GSIP)**.
 
 ```
-/home/rati/bsc_thesis/BigEarthNetv2.0/main/
+/home/rati/extra/work/GSIP/
 ├── configs/                  # Hydra configuration files
 │   ├── config.yaml           # Main entry point for configuration
 │   ├── data_source/          # Data source settings (Sentinel-2, etc.)
 │   ├── model/                # Model architectures and adapters
 │   │   ├── convnext_s2.yaml  # Config for ConvNeXt (S2 only)
-│   │   ├── prithvi_flood_segmentation.yaml # Config for Prithvi Flood Segmentation
+│   │   ├── prithvi_crop.yaml # Config for Prithvi Segmentation
 │   │   ├── resnet_all.yaml   # Config for ResNet50 (S1 + S2)
 │   │   ├── resnet_s2.yaml    # Config for ResNet50 (S2 only)
 │   │   └── ...               # Other model configurations

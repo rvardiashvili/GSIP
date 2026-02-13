@@ -38,6 +38,7 @@ class InferenceEngine:
                 state_dict = state_dict['state_dict']
             self.model.load_state_dict(state_dict, strict=False) # strict=False to allow flexible loading
             
+        log.info(f"DEBUG: InferenceEngine moving model to device: {self.device}")
         self.model.to(self.device)
         self.model.eval()
 

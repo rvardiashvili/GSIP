@@ -255,7 +255,7 @@ def export_benchmark_results(source_dir: Path, zip_path: Path):
         log.error(f"Export failed: {e}")
 
 
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser(description="Run GSIP Benchmark Suite")
     parser.add_argument(
         "--config",
@@ -322,3 +322,7 @@ if __name__ == "__main__":
         sys.exit(0)
 
     run_benchmark_suite(output_dir, benchmark_configs, gpu_index=gpu_index)
+
+
+if __name__ == "__main__":
+    main()

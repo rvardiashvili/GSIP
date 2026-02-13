@@ -322,6 +322,7 @@ def main_hydra(cfg: DictConfig):
 
         # Inject Device info
         adapter_cfg["params"]["device"] = device_str
+        log.info(f"DEBUG: Adapter Params Device set to: {adapter_cfg['params'].get('device')}")
 
         # Inject file patterns from data_source
         if "s2_file_pattern" in cfg.data_source:

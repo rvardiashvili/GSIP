@@ -236,7 +236,8 @@ def estimate_optimal_batch_size(
     model.eval()  # Ensure eval mode
 
     # Get initial state
-    torch.cuda.synchronize()
+    log.info(f"DEBUG: estimate_optimal_batch_size syncing on device: {device}")
+    torch.cuda.synchronize(device)
     torch.cuda.empty_cache()
 
     try:

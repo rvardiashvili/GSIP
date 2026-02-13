@@ -97,10 +97,10 @@ This document details the key functions and classes in the codebase, explaining 
 
 **Memory Formula (Bytes Per Pixel):**
 1.  **Input Patches:**
-    $$ BPP_{patches} = 4 \cdot N_{bands} \cdot \left(\frac{1}{R_{stride}}\right)^2 \cdot (Q_{prefetch} + 1) $$
+    $$ BPP_{patches} = 4 \cdot N_{bands} \cdot (Q_{prefetch} + 2) $$
 2.  **Logits (Model Output):**
-    *   *Segmentation:* $$ BPP_{logits} = 4 \cdot N_{classes} \cdot \left(\frac{1}{R_{stride}}\right)^2 \cdot (Q_{writer} + 2) $$
-    *   *Classification:* $$ BPP_{logits} = \frac{4 \cdot N_{classes}}{(P_{size} \cdot R_{stride})^2} \cdot (Q_{writer} + 2) $$
+    *   *Segmentation:* $$ BPP_{logits} = 4 \cdot N_{classes} \cdot \left(\frac{1}{R_{stride}}\right)^2 \cdot (Q_{writer} + 3) $$
+    *   *Classification:* $$ BPP_{logits} = \frac{4 \cdot N_{classes}}{(P_{size} \cdot R_{stride})^2} \cdot (Q_{writer} + 3) $$
 3.  **Reconstruction Buffer:**
     $$ BPP_{recon} = 4 \cdot (N_{classes} + 1) $$
 4.  **Metrics Buffers:**
@@ -108,7 +108,7 @@ This document details the key functions and classes in the codebase, explaining 
 5.  **IO Overhead:**
     $$ BPP_{io} \approx 4 \cdot N_{bands} $$
 
-**Total Footprint:** $$ BPP_{total} = BPP_{patches} + BPP_{logits} + BPP_{recon} + BPP_{metrics} + BPP_{io} + 200_{overhead} $$
+**Total Footprint:** $$ BPP_{total} = BPP_{patches} + BPP_{logits} + BPP_{recon} + BPP_{metrics} + BPP_{io} + 300_{overhead} $$
 
 ### `estimate_optimal_batch_size(model: torch.nn.Module, input_shape: Tuple[int, ...], dtype: torch.dtype, max_batch_size: int = 128, min_batch_size: int = 1, device: str = "cuda") -> int`
 **Reason:** Provides a heuristic to determine an optimal GPU batch size by measuring memory consumption for small batches. This helps in maximizing GPU utilization without encountering Out-Of-Memory (OOM) errors.
