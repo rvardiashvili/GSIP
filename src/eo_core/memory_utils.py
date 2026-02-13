@@ -40,7 +40,7 @@ def calculate_optimal_zor(
     reporter_configs = pipeline_cfg.get("reporters")
 
     halo = tiling_cfg.get("halo_size_pixels", 128)
-    mem_safety_factor = tiling_cfg.get("memory_safety_factor", 0.80)
+    mem_safety_buffer_gb = tiling_cfg.get("memory_safety_buffer_gb", 1.0)
 
     # Prefetch Queue
     use_prefetcher = dist_cfg.get("use_prefetcher", True)
@@ -52,14 +52,20 @@ def calculate_optimal_zor(
     writer_queue_size = dist_cfg.get("writer_queue_size", 4)
 
     # 1. Get Available Memory in Bytes
+    buffer_bytes = mem_safety_buffer_gb * 1024**3
     if max_ram_gb:
-        available_bytes = (max_ram_gb * 1024**3) * mem_safety_factor
+        total_available_bytes = max_ram_gb * 1024**3
+        available_bytes = max(0, total_available_bytes - buffer_bytes)
         log.info(
-            f"Using manual RAM limit: {max_ram_gb}GB (Effective: {available_bytes / 1024**3:.2f}GB)"
+            f"ZoR Calculation: Manual Limit={max_ram_gb:.2f}GB, Buffer={mem_safety_buffer_gb:.2f}GB -> Effective={available_bytes / 1024**3:.2f}GB"
         )
     else:
         mem = psutil.virtual_memory()
-        available_bytes = mem.available * mem_safety_factor
+        total_available_bytes = mem.available
+        available_bytes = max(0, total_available_bytes - buffer_bytes)
+        log.info(
+            f"ZoR Calculation: System Available={total_available_bytes / 1024**3:.2f}GB, Buffer={mem_safety_buffer_gb:.2f}GB -> Effective={available_bytes / 1024**3:.2f}GB"
+        )
 
     BYTES_FLOAT = 4
     BYTES_UINT8 = 1
@@ -148,7 +154,7 @@ def calculate_optimal_zor(
     total_bpp_recon = bpp_recon + bpp_reporters
 
     # Moderate generic overhead
-    overhead_bpp = 500
+    overhead_bpp = 300
 
     total_bpp = (
         total_bpp_patches + total_bpp_logits + total_bpp_recon + bpp_io + overhead_bpp
