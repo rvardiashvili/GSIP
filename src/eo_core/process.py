@@ -320,6 +320,9 @@ def main_hydra(cfg: DictConfig):
         if "params" not in adapter_cfg:
             adapter_cfg["params"] = {}
 
+        # Inject Device info
+        adapter_cfg["params"]["device"] = device_str
+
         # Inject file patterns from data_source
         if "s2_file_pattern" in cfg.data_source:
             adapter_cfg["params"]["s2_file_pattern"] = cfg.data_source.s2_file_pattern
