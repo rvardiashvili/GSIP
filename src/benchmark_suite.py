@@ -6,6 +6,7 @@ import os
 import shutil
 import json
 import argparse
+import zipfile
 from pathlib import Path
 from datetime import datetime
 
@@ -200,6 +201,59 @@ def run_benchmark_suite(
         )
 
 
+def export_benchmark_results(source_dir: Path, zip_path: Path):
+    """
+    Exports benchmark results to a ZIP file, mimicking the GTK client's export logic.
+    Excludes large TIFF files.
+    """
+    source_dir = Path(source_dir).resolve()
+    zip_path = Path(zip_path).resolve()
+    
+    log.info(f"Exporting results from {source_dir} to {zip_path}...")
+    
+    if not source_dir.exists():
+        log.error(f"Source directory {source_dir} does not exist.")
+        return
+
+    # Find all benchmark JSONs
+    benchmark_files = list(source_dir.rglob("benchmark_*.json"))
+    
+    if not benchmark_files:
+        log.warning("No benchmark results found to export.")
+        return
+
+    added_files = set()
+    
+    try:
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for f in benchmark_files:
+                # Add the benchmark file itself
+                rel_path = f.relative_to(source_dir)
+                if str(rel_path) not in added_files:
+                    zf.write(f, rel_path)
+                    added_files.add(str(rel_path))
+                
+                # Add sibling files (images, logs, other JSONs)
+                parent_dir = f.parent
+                for item in parent_dir.glob("*"):
+                    if item.is_file():
+                        # Skip large TIFF files
+                        if item.suffix.lower() in ['.tif', '.tiff']:
+                            continue
+                        
+                        # We are interested in visual assets and data
+                        if item.suffix.lower() in ['.png', '.jpg', '.jpeg', '.json', '.log', '.txt']:
+                            rel_item = item.relative_to(source_dir)
+                            if str(rel_item) not in added_files:
+                                zf.write(item, rel_item)
+                                added_files.add(str(rel_item))
+                                
+        log.info(f"Export successful. Archive created at: {zip_path}")
+        
+    except Exception as e:
+        log.error(f"Export failed: {e}")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run GSIP Benchmark Suite")
     parser.add_argument(
@@ -208,8 +262,22 @@ if __name__ == "__main__":
         default="benchmark_config.json",
         help="Path to the benchmark configuration JSON file (default: benchmark_config.json)",
     )
+    parser.add_argument(
+        "--export",
+        nargs=2,
+        metavar=("ZIP_PATH", "SOURCE_DIR"),
+        help="Export benchmark results to a ZIP archive. Usage: --export <zip_path> <source_dir>. This runs ONLY the export.",
+    )
     args = parser.parse_args()
 
+    # --- MODE 1: EXPORT ONLY ---
+    if args.export:
+        zip_out = args.export[0]
+        src_dir = args.export[1]
+        export_benchmark_results(src_dir, zip_out)
+        sys.exit(0)
+
+    # --- MODE 2: RUN BENCHMARKS ---
     config_path = Path(args.config)
 
     if not config_path.exists():
