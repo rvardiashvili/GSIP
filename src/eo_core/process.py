@@ -302,6 +302,10 @@ def main_hydra(cfg: DictConfig):
     means = cfg.model.get("means")
     stds = cfg.model.get("stds")
 
+    # Determine Device
+    gpu_index = cfg.pipeline.distributed.get("gpu_index", 0)
+    device_str = f"cuda:{gpu_index}" if torch.cuda.is_available() else "cpu"
+
     # --- 1. Instantiate Adapter First (Dependency Injection) ---
     # This allows us to query the adapter for its requirements (bands, classes, patch_size)
     # BEFORE we calculate memory usage and tiling.
@@ -351,7 +355,7 @@ def main_hydra(cfg: DictConfig):
             "patch_size": cfg.pipeline.tiling.get("patch_size", 120),
             "stride": cfg.pipeline.tiling.get("patch_stride", 60),
             "gpu_batch_size": cfg.pipeline.distributed.get("gpu_batch_size", 32),
-            "device": "cuda" if torch.cuda.is_available() else "cpu",
+            "device": device_str,
             "s2_file_pattern": cfg.data_source.get("s2_file_pattern"),
             "s1_file_pattern": cfg.data_source.get("s1_file_pattern"),
         }
@@ -427,7 +431,7 @@ def main_hydra(cfg: DictConfig):
     engine_config = {
         "adapter": adapter_cfg
     }  # Still pass config for reference if needed
-    engine = InferenceEngine(engine_config, adapter=adapter)
+    engine = InferenceEngine(engine_config, adapter=adapter, device=device_str)
 
     # Prepare Output Profiles
     profile.update(
@@ -482,7 +486,7 @@ def main_hydra(cfg: DictConfig):
     # --- Benchmarker Initialization ---
     from .benchmarker import Benchmarker
 
-    benchmarker = Benchmarker(output_dir=output_path)
+    benchmarker = Benchmarker(output_dir=output_path, gpu_index=gpu_index)
 
     # Record Model Config
     # Use config values or fallbacks if missing

@@ -24,14 +24,14 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
-def get_gpu_temperature():
+def get_gpu_temperature(gpu_index=0):
     """Gets the current GPU temperature."""
     if not PYNVML_AVAILABLE:
         log.warning("pynvml not installed. Cannot get GPU temperature.")
         return None
     try:
         pynvml.nvmlInit()
-        handle = pynvml.nvmlDeviceGetHandleByIndex(0)  # Default to GPU 0
+        handle = pynvml.nvmlDeviceGetHandleByIndex(gpu_index)  # Default to GPU 0
         temp = pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU)
         return temp
     except Exception as e:
@@ -44,7 +44,7 @@ def get_gpu_temperature():
             pass
 
 
-def wait_for_gpu_cooldown(target_temp: int, poll_interval: int = 2):
+def wait_for_gpu_cooldown(target_temp: int, gpu_index: int = 0, poll_interval: int = 2):
     """
     Blocks execution indefinitely until GPU temperature drops below target_temp.
     """
@@ -57,9 +57,9 @@ def wait_for_gpu_cooldown(target_temp: int, poll_interval: int = 2):
 
     try:
         pynvml.nvmlInit()
-        handle = pynvml.nvmlDeviceGetHandleByIndex(0)  # Default to GPU 0
+        handle = pynvml.nvmlDeviceGetHandleByIndex(gpu_index)  # Default to GPU 0
 
-        log.info(f"Waiting for GPU to cool down to {target_temp}°C (No Timeout)...")
+        log.info(f"Waiting for GPU {gpu_index} to cool down to {target_temp}°C (No Timeout)...")
 
         while True:
             temp = pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU)
@@ -84,7 +84,7 @@ def wait_for_gpu_cooldown(target_temp: int, poll_interval: int = 2):
 
 
 def run_benchmark_suite(
-    output_base: str, benchmark_configs: list, python_bin: str = sys.executable
+    output_base: str, benchmark_configs: list, gpu_index: int = 0, python_bin: str = sys.executable
 ):
     """
     Orchestrates the back-to-back benchmarking.
@@ -98,7 +98,7 @@ def run_benchmark_suite(
     log.info(f"Output Base: {output_base}")
     log.info(f"Benchmarks to Run: {len(benchmark_configs)}")
 
-    initial_gpu_temp = get_gpu_temperature()
+    initial_gpu_temp = get_gpu_temperature(gpu_index)
     if initial_gpu_temp is not None:
         log.info(f"Initial GPU temperature: {initial_gpu_temp}°C")
 
@@ -130,7 +130,7 @@ def run_benchmark_suite(
 
         # 1. SMART COOLDOWN
         if initial_gpu_temp is not None:
-            wait_for_gpu_cooldown(target_temp=initial_gpu_temp)
+            wait_for_gpu_cooldown(target_temp=initial_gpu_temp, gpu_index=gpu_index)
 
         # 2. DEFINE OUTPUT
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -143,6 +143,7 @@ def run_benchmark_suite(
             f"input_path={input_path}",
             f"output_path={run_output}",
             f"model={model_name}",
+            f"pipeline.distributed.gpu_index={gpu_index}",
             # Force enable benchmarking flags just in case
             "pipeline.output.save_preview=true",
             "pipeline.disable_progress_bar=true", # Disable progress bars to keep logs clean
@@ -263,6 +264,11 @@ if __name__ == "__main__":
         help="Path to the benchmark configuration JSON file (default: benchmark_config.json)",
     )
     parser.add_argument(
+        "--device",
+        type=int,
+        help="Override GPU index for all benchmarks.",
+    )
+    parser.add_argument(
         "--export",
         nargs=2,
         metavar=("ZIP_PATH", "SOURCE_DIR"),
@@ -307,9 +313,12 @@ if __name__ == "__main__":
 
     output_dir = suite_config.get("output_dir", "out/benchmarks_final")
     benchmark_configs = suite_config.get("benchmarks", [])
+    
+    # Priority: Command line flag > Config file > Default (0)
+    gpu_index = args.device if args.device is not None else suite_config.get("gpu_index", 0)
 
     if not benchmark_configs:
         log.warning("No benchmarks defined in configuration file.")
         sys.exit(0)
 
-    run_benchmark_suite(output_dir, benchmark_configs)
+    run_benchmark_suite(output_dir, benchmark_configs, gpu_index=gpu_index)

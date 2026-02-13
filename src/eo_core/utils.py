@@ -18,9 +18,11 @@ log = logging.getLogger(__name__)
 # --- Constants & Helpers ---
 # ----------------------------------------------------------------------
 
-def get_device():
+def get_device(device_id: Optional[int] = None):
     """Returns the best available device."""
     if torch.cuda.is_available():
+        if device_id is not None:
+            return torch.device(f"cuda:{device_id}")
         return torch.device("cuda")
     return torch.device("cpu")
 

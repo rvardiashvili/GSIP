@@ -11,10 +11,12 @@ import logging
 
 log = logging.getLogger(__name__)
 
+
 class Benchmarker:
-    def __init__(self, output_dir: Path, interval: float = 1.0):
+    def __init__(self, output_dir: Path, gpu_index: int = 0, interval: float = 1.0):
         self.output_dir = Path(output_dir)
         self.interval = interval
+        self.gpu_index = gpu_index
         self.running = False
         self.thread = None
         self.samples = []
@@ -24,17 +26,20 @@ class Benchmarker:
         self.system_info = self._get_system_info()
         self.start_time = None
         self.end_time = None
-        
+
         # Try to initialize NVML for GPU stats
         self.nvml_available = False
         try:
             import pynvml
+
             pynvml.nvmlInit()
             self.nvml_available = True
-            self.handle = pynvml.nvmlDeviceGetHandleByIndex(0) # Assume GPU 0
-            log.info("Benchmarker: NVIDIA GPU monitoring enabled.")
+            self.handle = pynvml.nvmlDeviceGetHandleByIndex(self.gpu_index)  # Use specified GPU
+            log.info(f"Benchmarker: NVIDIA GPU monitoring enabled (GPU {self.gpu_index}).")
         except ImportError:
-            log.warning("Benchmarker: pynvml not found. GPU utilization will not be logged. (pip install pynvml)")
+            log.warning(
+                "Benchmarker: pynvml not found. GPU utilization will not be logged. (pip install pynvml)"
+            )
         except Exception as e:
             log.warning(f"Benchmarker: NVML Init failed: {e}")
 
@@ -50,7 +55,7 @@ class Benchmarker:
             "cuda_available": torch.cuda.is_available(),
         }
         if torch.cuda.is_available():
-            info["gpu_name"] = torch.cuda.get_device_name(0)
+            info["gpu_name"] = torch.cuda.get_device_name(self.gpu_index)
             info["gpu_count"] = torch.cuda.device_count()
         return info
 
@@ -105,24 +110,27 @@ class Benchmarker:
                     "cpu_percent": psutil.cpu_percent(interval=None),
                     "ram_percent": psutil.virtual_memory().percent,
                     "ram_used_gb": round(psutil.virtual_memory().used / (1024**3), 2),
-                    "process_ram_used_gb": round(proc_mem_bytes / (1024**3), 2)
+                    "process_ram_used_gb": round(proc_mem_bytes / (1024**3), 2),
                 }
 
                 # GPU Stats
                 if self.nvml_available:
                     import pynvml
+
                     try:
                         util = pynvml.nvmlDeviceGetUtilizationRates(self.handle)
                         mem = pynvml.nvmlDeviceGetMemoryInfo(self.handle)
-                        temp = pynvml.nvmlDeviceGetTemperature(self.handle, pynvml.NVML_TEMPERATURE_GPU)
-                        
+                        temp = pynvml.nvmlDeviceGetTemperature(
+                            self.handle, pynvml.NVML_TEMPERATURE_GPU
+                        )
+
                         sample["gpu_util_percent"] = util.gpu
                         sample["gpu_mem_percent"] = (mem.used / mem.total) * 100
                         sample["gpu_mem_used_gb"] = round(mem.used / (1024**3), 2)
                         sample["gpu_temp_c"] = temp
                     except Exception:
                         pass
-                
+
                 self.samples.append(sample)
                 time.sleep(self.interval)
             except Exception as e:
@@ -130,8 +138,10 @@ class Benchmarker:
                 break
 
     def save_report(self):
-        duration = (self.end_time - self.start_time).total_seconds() if self.end_time else 0
-        
+        duration = (
+            (self.end_time - self.start_time).total_seconds() if self.end_time else 0
+        )
+
         # Aggregate Events
         event_stats = {}
         for k, v in self.events.items():
@@ -139,9 +149,9 @@ class Benchmarker:
                 event_stats[k] = {
                     "count": len(v),
                     "sum": sum(v),
-                    "mean": sum(v)/len(v),
+                    "mean": sum(v) / len(v),
                     "min": min(v),
-                    "max": max(v)
+                    "max": max(v),
                 }
 
         # Aggregate Samples
@@ -149,32 +159,36 @@ class Benchmarker:
         if self.samples:
             keys = self.samples[0].keys()
             for k in keys:
-                if k == "timestamp": continue
+                if k == "timestamp":
+                    continue
                 values = [s[k] for s in self.samples if k in s]
                 if values:
                     metric_stats[k] = {
-                        "mean": sum(values)/len(values),
+                        "mean": sum(values) / len(values),
                         "max": max(values),
-                        "min": min(values)
+                        "min": min(values),
                     }
 
         report = {
             "meta": {
                 "start": self.start_time.isoformat(),
                 "end": self.end_time.isoformat() if self.end_time else None,
-                "duration_seconds": duration
+                "duration_seconds": duration,
             },
             "system": self.system_info,
             "model_config": self.model_config,
             "full_config": self.full_config,
             "pipeline_stats": event_stats,
             "system_stats": metric_stats,
-            "time_series": self.samples
+            "time_series": self.samples,
         }
 
-        filename = self.output_dir / f"benchmark_{self.start_time.strftime('%Y%m%d_%H%M%S')}.json"
-        with open(filename, 'w') as f:
+        filename = (
+            self.output_dir
+            / f"benchmark_{self.start_time.strftime('%Y%m%d_%H%M%S')}.json"
+        )
+        with open(filename, "w") as f:
             json.dump(report, f, indent=2)
-        
+
         log.info(f"Benchmark report saved to: {filename}")
         return filename
