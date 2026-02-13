@@ -11,9 +11,14 @@ class MetadataPassingWrapper(nn.Module):
         super().__init__()
         self.model = model
         self.batch_size = batch_size
-        self.norm_m = norm_m
-        self.norm_s = norm_s
-        self.device_target = device
+        
+        # Register as buffers so they move with .to() automatically
+        self.register_buffer('norm_m', norm_m)
+        self.register_buffer('norm_s', norm_s)
+        
+        # Initial move to requested device (though engine will likely override this)
+        self.to(device)
+        
         self.activation = activation
 
     def forward(self, input_package: Tuple[Any, Any]) -> Tuple[torch.Tensor, Any]:
@@ -23,9 +28,8 @@ class MetadataPassingWrapper(nn.Module):
         results = []
         n = len(patches_list)
         
-        # Ensure norms are on device
-        norm_m = self.norm_m.to(self.device_target)
-        norm_s = self.norm_s.to(self.device_target)
+        # Determine current device dynamically (robust to external .to() calls)
+        current_device = self.norm_m.device
         
         # Import numpy here (or ensure it's imported at top)
         import numpy as np
@@ -38,10 +42,10 @@ class MetadataPassingWrapper(nn.Module):
             # Stack into contiguous array just for this batch (Efficiency Fix!)
             batch_np = np.stack(batch_list, axis=0)
             
-            batch = torch.from_numpy(batch_np).float().to(self.device_target)
+            batch = torch.from_numpy(batch_np).float().to(current_device)
             
-            # Normalize
-            batch = (batch - norm_m) / (norm_s + 1e-6)
+            # Normalize (buffers are already on current_device)
+            batch = (batch - self.norm_m) / (self.norm_s + 1e-6)
             
             # Inference
             output = self.model(batch)
