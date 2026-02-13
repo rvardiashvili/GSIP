@@ -305,6 +305,10 @@ def main_hydra(cfg: DictConfig):
     # Determine Device
     gpu_index = cfg.pipeline.distributed.get("gpu_index", 0)
     device_str = f"cuda:{gpu_index}" if torch.cuda.is_available() else "cpu"
+    if torch.cuda.is_available():
+        log.info(f"DEBUG: GPU Configuration - Requested Index: {gpu_index}, Current PyTorch Device: {torch.cuda.current_device()}")
+    else:
+        log.info("DEBUG: CUDA not available, using CPU")
 
     # --- 1. Instantiate Adapter First (Dependency Injection) ---
     # This allows us to query the adapter for its requirements (bands, classes, patch_size)

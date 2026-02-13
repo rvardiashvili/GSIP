@@ -35,7 +35,10 @@ class Benchmarker:
             pynvml.nvmlInit()
             self.nvml_available = True
             self.handle = pynvml.nvmlDeviceGetHandleByIndex(self.gpu_index)  # Use specified GPU
-            log.info(f"Benchmarker: NVIDIA GPU monitoring enabled (GPU {self.gpu_index}).")
+            gpu_name = pynvml.nvmlDeviceGetName(self.handle)
+            if isinstance(gpu_name, bytes):
+                gpu_name = gpu_name.decode('utf-8')
+            log.info(f"Benchmarker: NVIDIA GPU monitoring enabled (GPU {self.gpu_index}: {gpu_name}).")
         except ImportError:
             log.warning(
                 "Benchmarker: pynvml not found. GPU utilization will not be logged. (pip install pynvml)"

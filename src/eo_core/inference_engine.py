@@ -79,6 +79,14 @@ class InferenceEngine:
         else:
             model_input_device = model_input
 
+        if hasattr(self, '_logged_device') is False:
+             # Log only once to avoid spam
+             if isinstance(model_input_device, torch.Tensor):
+                 log.info(f"DEBUG: InferenceEngine input tensor is on: {model_input_device.device}")
+             elif isinstance(model_input_device, list) and len(model_input_device) > 0 and isinstance(model_input_device[0], torch.Tensor):
+                 log.info(f"DEBUG: InferenceEngine input tensor list[0] is on: {model_input_device[0].device}")
+             self._logged_device = True
+
         # 2. Inference
         with torch.no_grad():
             model_output = self.model(model_input_device)
