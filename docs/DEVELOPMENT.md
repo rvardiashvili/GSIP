@@ -1,73 +1,15 @@
 # Development & Modification Guide
 
-This document explains how to modify and extend the code, focusing on the new Adapter system.
+## Extended Documentation
+For detailed guides on adding new models (Adapters) or custom output formats (Reporters), please refer to:
+👉 **[EXTENDING.md](EXTENDING.md)**
 
-## How to Add a New Model
+## Project Architecture
 
-Thanks to the Adapter pattern, you don't need to modify the core pipeline logic to add a new model type.
-
-### 1. Create a New Adapter
-Create a file in `src/eo_core/adapters/` (e.g., `my_custom_adapter.py`).
-Inherit from `BaseAdapter` and implement the required methods and properties:
-
-```python
-from .base import BaseAdapter
-
-class MyCustomAdapter(BaseAdapter):
-    def build_model(self):
-        # Initialize your PyTorch model here
-        return MyModel()
-
-    def preprocess(self, raw_input):
-        # 1. Read data using raw_input['tile_folder']
-        # 2. Cut into patches
-        # 3. Return (patches_np, metadata)
-        pass
-
-    def postprocess(self, model_output):
-        # Convert model logits to usable format (probs, masks)
-        pass
-    
-    # Properties required for Memory Auto-Configuration
-    @property
-    def num_classes(self) -> int:
-        return 10
-
-    @property
-    def num_bands(self) -> int:
-        return 12
-
-    @property
-    def patch_size(self) -> int:
-        return 120
-        
-    @property
-    def stride(self) -> int:
-        return 60
-        
-    @property
-    def is_segmentation(self) -> bool:
-        return False # Set True if model outputs a spatial map
-```
-
-### 2. Create a Configuration File
-Create a YAML file in `configs/model/` (e.g., `my_model.yaml`). Point it to your new adapter:
-
-```yaml
-# @package _global_
-model:
-  adapter:
-    path: "eo_core.adapters.my_custom_adapter"
-    class: "MyCustomAdapter"
-    params:
-      some_param: 123
-      bands: ['B02', 'B03', 'B04']
-```
-
-### 3. Run It
-```bash
-python src/main.py model=my_model input_path=...
-```
+### Unified CLI Dispatcher
+All tools (`infer`, `suite`, `studio`, `manage`) are managed by a central dispatcher in **`src/cli.py`**.
+- During development, you should run commands via: `python src/cli.py [subcommand]`.
+- When modifying sub-tools, ensure the `main()` function in their respective scripts (e.g., `src/manage.py`) remains the primary entry point for the dispatcher.
 
 ## Modifying the Core Pipeline
 

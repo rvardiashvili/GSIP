@@ -17,8 +17,9 @@ This document outlines the directory layout and purpose of key files in the **Ge
 │       └── inference_params.yaml
 │
 ├── src/
-│   ├── main.py               # CLI Entry Point
-│   ├── benchmark_suite.py    # Benchmarking Suite Orchestrator
+│   ├── main.py               # CLI Entry Point (Inference)
+│   ├── cli.py                # Unified CLI Dispatcher (gsip)
+│   ├── run_suite.py          # Batch Run Orchestrator
 │   ├── requirements.txt      # Python dependencies
 │   └── eo_core/              # Core Package Code (GeoSpatial Inference Pipeline logic)
 │       ├── adapters/         # Model Adapters (Interface for various ML models)
@@ -36,7 +37,8 @@ This document outlines the directory layout and purpose of key files in the **Ge
 │   ├── PROJECT_STRUCTURE.md  # This File
 │   ├── API_REFERENCE.md      # Detailed Function Documentation
 │   ├── USAGE.md              # Usage Guide
-│   └── DEVELOPMENT.md        # Developer Guide
+│   ├── DEVELOPMENT.md        # Developer Guide
+│   └── EXTENDING.md          # Guide for Adapters and Reporters
 ├── gtk_client/               # GSIP Studio (Native GTK4 Analysis Dashboard)
 │   ├── main.py               # GUI Entry Point
 │   ├── core/                 # GUI Logic (Data loading, Plotting glue)
@@ -50,7 +52,7 @@ This document outlines the directory layout and purpose of key files in the **Ge
 
 *   **`configs/`**: Controls every aspect of the pipeline without changing code. Models, batch sizes, and file paths are defined here.
 *   **`docs/`**: Contains all detailed documentation for the project.
-*   **`gtk_client/`**: The codebase for GSIP Studio, providing a visual way to analyze and compare benchmarks.
+*   **`gtk_client/`**: The codebase for GSIP Studio, providing a visual way to analyze and compare batch runs.
 *   **`src/eo_core/adapters/`**: The "plug-and-play" layer for Models. If you want to add a new model type (e.g., a YOLO detector or a specific segmentation net), you write a new Adapter here without touching the core pipeline logic.
 *   **`src/eo_core/reporters/`**: The "plug-and-play" layer for Outputs. If you want to generate a new type of output file (e.g., Zarr, COG, JSON stats), you write a new Reporter here and add it to the configuration.
 *   **`src/eo_core/`**: Contains the heavy lifting logic. `process.py` is the orchestrator, managing the multiprocessing and tiling logic described in `docs/TECHNICAL_REFERENCE.md`.

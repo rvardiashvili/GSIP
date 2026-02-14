@@ -1,0 +1,5 @@
+recursive-include configs *
+recursive-include src *.py
+recursive-include gtk_client *.py *.glade *.ui
+include README.md
+include LICENSE

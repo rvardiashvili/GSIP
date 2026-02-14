@@ -16,26 +16,46 @@ Detailed documentation is organized in the `docs/` directory:
 
 ## 🚀 Quick Start
 
-### 1. Installation
+GSIP can be used either as an installed command-line tool or by running the scripts directly from the source.
+
+### Option 1: Installed Tool (Recommended)
+This installs GSIP as a global or user-level command (`gsip`).
 
 ```bash
+# Using pipx (isolated environment)
+pipx install .
+
+# Or using standard pip
+pip install .
+
+# Usage:
+gsip infer model=resnet_s2 input_path=...
+gsip studio
+```
+
+### Option 2: Local / Development
+Run directly from the repository without a global installation.
+
+```bash
+# 1. Install dependencies
 pip install -r src/requirements.txt
-pip install -e .
+
+# 2. Run using the unified CLI script
+python src/cli.py infer model=resnet_s2 input_path=...
+python src/cli.py studio
 ```
 
-### 2. Run a Model (CLI)
+---
 
-```bash
-python src/main.py model=resnet_s2 input_path=/path/to/tile output_path=./out
-```
+## 🛠️ Unified Command: `gsip`
 
-### 3. GSIP Studio (GUI Analysis)
+Whether installed or run via `cli.py`, the entry point provides several sub-commands:
 
-The project includes a native GTK4 dashboard for deep performance analysis and visualization of benchmark results.
+*   **`gsip infer`**: Run inference on a single tile or folder.
+*   **`gsip suite`**: Execute a batch run (experiments/benchmarks) defined in JSON.
+*   **`gsip studio`**: Launch the GTK4 Analysis Dashboard.
+*   **`gsip manage`**: Scaffolding and linking tools for new Adapters/Reporters.
 
-```bash
-python gtk_client/main.py
-```
 
 ## Key Features
 

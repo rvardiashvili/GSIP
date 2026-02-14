@@ -3,7 +3,7 @@ gi.require_version('Gtk', '4.0')
 from gi.repository import Gtk
 
 from .pages.inference import InferencePage
-from .pages.benchmarks import BenchmarkPage
+from .pages.batch_run import BatchRunPage
 from .pages.analysis import AnalysisPage
 from .pages.configs import ConfigsPage
 
@@ -27,7 +27,7 @@ class MainWindow(Gtk.ApplicationWindow):
         
         # Pages
         self.stack.add_titled(InferencePage(), "inference", "Run Inference")
-        self.stack.add_titled(BenchmarkPage(), "benchmark", "Benchmark Suite")
+        self.stack.add_titled(BatchRunPage(), "benchmark", "Batch Run")
         self.stack.add_titled(AnalysisPage(), "analysis", "Analysis Dashboard")
         self.stack.add_titled(ConfigsPage(), "configs", "Config Editor")
         

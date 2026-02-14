@@ -6,7 +6,7 @@ import os
 import subprocess
 from pathlib import Path
 from ...core.runner import PipelineRunner
-from ...core.config_io import list_model_configs
+from ...core.config_io import list_model_configs, PROJECT_ROOT
 from ..widgets.log_viewer import LogViewer
 from ..widgets.file_picker import FilePicker
 
@@ -76,7 +76,16 @@ class InferencePage(Gtk.Box):
         self.last_output_path = None
 
     def on_run(self, btn):
-        model = self.model_combo.get_selected_item().get_string()
+        # ... (Get input/output paths) ...
+        # Assume correct variable names from context
+        
+        # Get selected model directly from the dropdown model (GtkStringList)
+        selected_item = self.model_combo.get_selected_item()
+        if selected_item:
+             model = selected_item.get_string()
+        else:
+             model = "resnet_s2" # Fallback
+             
         inp = self.input_picker.get_path()
         out = self.output_picker.get_path()
         
@@ -86,8 +95,11 @@ class InferencePage(Gtk.Box):
             
         self.last_output_path = out
         
+        # Always point directly to the src/main.py file using the absolute project root
+        main_py_path = (PROJECT_ROOT / "src" / "main.py").resolve()
+        
         cmd = [
-            sys.executable, "src/main.py",
+            sys.executable, str(main_py_path),
             f"model={model}",
             f"input_path={inp}",
             f"output_path={out}",
@@ -95,7 +107,7 @@ class InferencePage(Gtk.Box):
         ]
         
         self.log_view.clear()
-        self.log_view.append_text(f"Starting command: {" ".join(cmd)}\n\n")
+        self.log_view.append_text(f"Starting command: {' '.join(cmd)}\n\n")
         
         self.run_btn.set_sensitive(False)
         self.stop_btn.set_sensitive(True)

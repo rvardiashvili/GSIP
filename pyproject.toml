@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "geospatial-inference-pipeline"
+name = "GSIP"
 version = "0.1.0"
 description = "A scalable, multi-modal deep learning pipeline for robust and efficient inference on gigapixel-scale Earth Observation (EO) data."
 authors = [{name = "Rati Vardiashvili", email = "rvardiashvili@constructor.university"}]
@@ -47,9 +47,11 @@ dependencies = [
 "Homepage" = "https://github.com/rvardiashvili/GeoTiff-Scalable-Analysis-Pipeline"
 
 [project.scripts]
-gsip = "src.main:main"
-gsip-bench = "src.benchmark_suite:main"
-gsip-studio = "gtk_client.main:main"
+gsip = "src.cli:main"
+
 
 [tool.setuptools.packages.find]
 where = ["."]
+
+[tool.setuptools.package-data]
+"*" = ["*.yaml", "*.json", "*.png", "*.jpg"]

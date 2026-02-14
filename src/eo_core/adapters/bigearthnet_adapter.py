@@ -157,7 +157,6 @@ class BigEarthNetAdapter(BaseAdapter):
         # Get Device (Engine will move this wrapper to device, but we need to know it for batching)
         device_str = self.params.get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
         device = torch.device(device_str)
-        log.info(f"DEBUG: BigEarthNetAdapter using device: {device} for batch estimation")
         
         # Normalization Params
         means = self.params.get('means')

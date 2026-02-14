@@ -24,7 +24,6 @@ class InferenceEngine:
             self.adapter = self._load_adapter()
         
         # 2. Build Model
-        log.info(f"Building model on device: {self.device}")
         self.model = self.adapter.build_model()
         
         # 3. Load Weights (if provided and not handled by adapter internally)
@@ -38,7 +37,6 @@ class InferenceEngine:
                 state_dict = state_dict['state_dict']
             self.model.load_state_dict(state_dict, strict=False) # strict=False to allow flexible loading
             
-        log.info(f"DEBUG: InferenceEngine moving model to device: {self.device}")
         self.model.to(self.device)
         self.model.eval()
 
@@ -78,14 +76,6 @@ class InferenceEngine:
             model_input_device = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v for k, v in model_input.items()}
         else:
             model_input_device = model_input
-
-        if hasattr(self, '_logged_device') is False:
-             # Log only once to avoid spam
-             if isinstance(model_input_device, torch.Tensor):
-                 log.info(f"DEBUG: InferenceEngine input tensor is on: {model_input_device.device}")
-             elif isinstance(model_input_device, list) and len(model_input_device) > 0 and isinstance(model_input_device[0], torch.Tensor):
-                 log.info(f"DEBUG: InferenceEngine input tensor list[0] is on: {model_input_device[0].device}")
-             self._logged_device = True
 
         # 2. Inference
         with torch.no_grad():

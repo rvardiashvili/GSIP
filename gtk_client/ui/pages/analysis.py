@@ -7,7 +7,7 @@ import json
 import zipfile
 import threading
 from gi.repository import Gtk, Gdk, GObject, GLib
-from ...core.config_io import scan_benchmark_results, load_json
+from ...core.config_io import scan_run_results, load_json
 from ..widgets.file_picker import FilePicker
 from ..widgets.native_chart import NativeChart
 from ..widgets.native_bar_chart import NativeBarChart
@@ -24,7 +24,7 @@ class AnalysisPage(Gtk.Paned):
         
         # Folder Picker
         self.folder_picker = FilePicker("Root Folder", is_folder=True)
-        self.folder_picker.set_path(str(Path("out/benchmarks_final").resolve()))
+        self.folder_picker.set_path(str(Path("out/runs").resolve()))
         left_box.append(self.folder_picker)
         
         refresh_btn = Gtk.Button(label="Scan for Reports")
@@ -62,7 +62,7 @@ class AnalysisPage(Gtk.Paned):
         path = self.folder_picker.get_path()
         if not path: return
         
-        self.benchmark_files = scan_benchmark_results(path)
+        self.benchmark_files = scan_run_results(path)
         self.benchmark_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
         
         if not self.benchmark_files:
@@ -119,7 +119,7 @@ class AnalysisPage(Gtk.Paned):
     def show_summary_view(self):
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=20)
         
-        title = Gtk.Label(label="Global Benchmark Comparison")
+        title = Gtk.Label(label="Global Run Comparison")
         title.add_css_class("title-1")
         title.set_halign(Gtk.Align.START)
         title.set_hexpand(True)
@@ -139,7 +139,7 @@ class AnalysisPage(Gtk.Paned):
             if d: valid_data.append((f, d))
             
         if not valid_data:
-            self.detail_box.append(Gtk.Label(label="No valid benchmark data found for summary."))
+            self.detail_box.append(Gtk.Label(label="No valid run data found for summary."))
             return
 
         # Prepare Data for Bar Charts
@@ -182,7 +182,7 @@ class AnalysisPage(Gtk.Paned):
 
     def on_export_clicked(self, btn):
         dialog = Gtk.FileDialog.new()
-        dialog.set_initial_name("benchmark_export.zip")
+        dialog.set_initial_name("batch_export.zip")
         # In GTK4, dialog.save takes (parent_window, cancellable, callback)
         # We need to find the parent window.
         parent = self.get_root()

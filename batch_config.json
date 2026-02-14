@@ -1,0 +1,46 @@
+{
+  "output_dir": "out/comprehensive_test",
+  "global_overrides": [
+    "+pipeline.reporters.preview.enabled=true"
+  ],
+  "runs": [
+    {
+      "_comment": "Case 1: Simple Single Run",
+      "name": "resnet_s2",
+      "input_path": "/path/to/tile1.SAFE"
+    },
+    {
+      "_comment": "Case 2: Multi-Model on Shared Input with Specific Labels & Overrides",
+      "models": [
+        "resnet_s2", 
+        {
+          "name": "convnext_s2", 
+          "label": "Experimental_CNX", 
+          "config_overrides": ["+model.params.drop_path_rate=0.2"]
+        }
+      ],
+      "input_path": "/path/to/tile2.SAFE",
+      "config_overrides": ["+pipeline.tiling.max_memory_gb=16"]
+    },
+    {
+      "_comment": "Case 3: Single Model on Multiple Inputs (Batch Processing)",
+      "name": "prithvi_crop",
+      "input_path": [
+        "/path/to/tile3.SAFE",
+        "/path/to/tile4.SAFE"
+      ]
+    },
+    {
+      "_comment": "Case 4: Cartesian Product (2 Models x 2 Inputs) with Mapped Overrides",
+      "name": ["resnet_all", "resnet_s2"],
+      "input_path": [
+        "/path/to/tile5.SAFE",
+        "/path/to/tile6.SAFE"
+      ],
+      "label": ["Multimodal_ResNet", "Optical_ResNet"],
+      "overrides": {
+        "resnet_all": ["+data_source.s1_file_pattern='S1*.tiff'"]
+      }
+    }
+  ]
+}

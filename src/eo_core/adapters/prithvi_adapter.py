@@ -276,7 +276,6 @@ class PrithviAdapter(BaseAdapter):
         # 3. Load State Dict
         device_str = self.params.get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
         device = torch.device(device_str)
-        log.info(f"DEBUG: PrithviAdapter using device: {device} for batch estimation")
         
         state_dict = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
         if 'state_dict' in state_dict:

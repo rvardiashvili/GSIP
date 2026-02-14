@@ -33,8 +33,6 @@ class MetadataPassingWrapper(nn.Module):
         
         # Determine current device dynamically (robust to external .to() calls)
         current_device = self.norm_m.device
-        if n > 0:
-             log.info(f"DEBUG: MetadataPassingWrapper.forward executing on: {current_device} (Batch count: {n})")
         
         # Import numpy here (or ensure it's imported at top)
         import numpy as np

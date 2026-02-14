@@ -40,7 +40,7 @@ def calculate_optimal_zor(
     reporter_configs = pipeline_cfg.get("reporters")
 
     halo = tiling_cfg.get("halo_size_pixels", 128)
-    mem_safety_buffer_gb = tiling_cfg.get("memory_safety_buffer_gb", 1.0)
+    mem_safety_buffer_gb = tiling_cfg.get("memory_safety_buffer_gb", 2.0)
 
     # Prefetch Queue
     use_prefetcher = dist_cfg.get("use_prefetcher", True)
@@ -201,7 +201,7 @@ def estimate_optimal_batch_size(
     model: torch.nn.Module,
     input_shape: Tuple[int, ...],
     device: torch.device,
-    safety_factor: float = 0.40,
+    safety_margin_gb: float = 2.0,
 ) -> int:
     """
     Estimates the optimal batch size for the given model and input shape by binary search
@@ -211,7 +211,7 @@ def estimate_optimal_batch_size(
         model: The PyTorch model (should be on 'device').
         input_shape: Shape of a SINGLE sample (C, H, W) or (C, T, H, W).
         device: The target device.
-        safety_factor: Fraction of available memory to use (default 0.40).
+        safety_margin_gb: Buffer in GB to leave free (default 2.0).
 
     Returns:
         Recommended batch size (int).
@@ -220,23 +220,24 @@ def estimate_optimal_batch_size(
         return 16  # Conservative default for CPU
 
     log.info(
-        f"🧠 Starting Binary Search for Optimal Batch Size (Safety={safety_factor:.2f})..."
+        f"🧠 Starting Binary Search for Optimal Batch Size (Margin={safety_margin_gb:.2f}GB)..."
     )
 
     # Binary Search Parameters
     low = 1
-    high = 256  # Reduced hard cap from 512 to 256 for stability
+    high = 1024  # Increased hard cap from 256 to 1024
     optimal_bs = 1
 
     # Get Total Memory
     total_mem = torch.cuda.get_device_properties(device).total_memory
+    safety_margin_bytes = int(safety_margin_gb * 1024**3)
+    available_limit = max(0, total_mem - safety_margin_bytes)
 
     # Move model to device
     model.to(device)
     model.eval()  # Ensure eval mode
 
     # Get initial state
-    log.info(f"DEBUG: estimate_optimal_batch_size syncing on device: {device}")
     torch.cuda.synchronize(device)
     torch.cuda.empty_cache()
 
@@ -263,7 +264,7 @@ def estimate_optimal_batch_size(
                 # Check PEAK Memory Usage
                 peak_alloc = torch.cuda.max_memory_allocated(device)
 
-                if peak_alloc > (total_mem * safety_factor):
+                if peak_alloc > available_limit:
                     high = mid - 1
                 else:
                     # It works and is safe

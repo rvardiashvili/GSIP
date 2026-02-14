@@ -146,8 +146,8 @@ The pipeline execution begins at `src/main.py`. This script leverages the `Hydra
 
 Upon successful configuration loading, `src/main.py` invokes `main_hydra(cfg)` located in `src/eo_core/process.py`, which acts as the central orchestrator for the entire inference workflow.
 
-**Benchmarking:**
-For performance testing, `src/benchmark_suite.py` serves as the dedicated entry point. It orchestrates back-to-back runs of multiple models, monitors GPU temperatures (with smart cooldowns), and consolidates reports and artifacts into a centralized results directory.
+**Batch Execution:**
+For performance testing and bulk processing, `gsip suite` (running `src/run_suite.py`) serves as the dedicated entry point. It orchestrates back-to-back runs of multiple models (experiments), monitors GPU temperatures (with smart cooldowns), and consolidates reports and artifacts into a centralized results directory.
 
 ### 4.2 Orchestration and System Initialization (`main_hydra`)
 

@@ -1,160 +1,191 @@
 # Usage Guide
 
-This guide explains how to run the GeoSpatial Inference Pipeline (GSIP) using the available model configurations and how to analyze results using GSIP Studio.
+This guide explains how to run the GeoSpatial Inference Pipeline (GSIP) using the unified command system.
 
-## GSIP Studio (Desktop GUI)
+## 🛠️ Invocation Methods
 
-GSIP Studio is a native GTK4 application for visualizing and comparing benchmark results.
+You can interact with GSIP in two ways depending on how you installed it:
 
-### Features
-*   **Performance Monitoring:** Interactive charts for Memory (RAM) and GPU utilization.
-*   **Synchronized Hovers:** Hovering over one chart highlights the same timestamp on all others.
-*   **Spatial Analysis:** View classification maps, confidence, and entropy side-by-side with automated legends.
-*   **Global Comparison:** Compare peak memory and duration across all your benchmark runs.
-*   **Export:** Package benchmark results (JSONs and images) into a ZIP archive for sharing.
-
-### Launching the Studio
+### 1. As an Installed Command
+If you installed via `pipx install .` or `pip install .`, use the **`gsip`** command:
 ```bash
-python gtk_client/main.py
+gsip [subcommand] [arguments]
 ```
-By default, the Studio looks for results in `out/benchmarks_final`. You can change the root folder using the file picker in the sidebar.
 
-## Basic Command Structure (CLI)
+### 2. As a Local Script
+If you are running directly from the source code, use **`python src/cli.py`**:
+```bash
+python src/cli.py [subcommand] [arguments]
+```
 
-The general command to run the pipeline is:
+*Note: In the examples below, we use `gsip` for brevity, but you can always substitute it with `python src/cli.py`.*
+
+## Quick Reference
+
+| Command | Description |
+| :--- | :--- |
+| `gsip infer` | Run the main inference pipeline on a single tile/image. |
+| `gsip suite` | Execute a batch of runs (experiments/benchmarks) defined in a JSON file. |
+| `gsip studio` | Launch the desktop GUI for analysis and visualization. |
+| `gsip manage` | Manage adapters, reporters, and configurations. |
+
+---
+
+## 1. Running Inference (`gsip infer`)
+
+The core command to process data is `gsip infer`.
 
 ```bash
-python src/main.py model=<model_config_name> input_path=<path_to_data> output_path=<path_to_output_dir>
+gsip infer model=<model_config> input_path=<path_to_data> output_path=<path_to_output>
 ```
 
 ### Understanding `input_path`
-The `input_path` parameter is versatile and handles different data structures automatically based on the content and the model's requirements:
+The system automatically handles different data structures:
 
-1.  **Single Image (S2 Only or S1+S2):** Point to a `.SAFE` directory (e.g., `S2B_MSIL2A_...SAFE`) OR a directory containing exactly one S2 `.SAFE` product (and optionally an S1 product).
-    *   *System Logic:* The system counts the number of S2 products (`S2*.SAFE`) in the folder. If count is 1, it treats it as a single time-step. If an S1 product is required (e.g., for `resnet_all`), the adapter looks for it in the same folder or relative to the S2 product.
+1.  **Single Image:** Point to a `.SAFE` directory (e.g., `S2B_MSIL2A_...SAFE`).
+2.  **Time Series:** Point to a folder *containing multiple* `.SAFE` directories. The system will load them as a sequence if the model supports it.
 
-2.  **Multi-Temporal Series:** Point to a folder *containing multiple* S2 `.SAFE` directories.
-    *   *System Logic:* If multiple S2 products are found AND the selected model (e.g., `prithvi`) requires multiple frames (`num_frames > 1`), the system automatically loads them as a time series.
+### Examples
 
-## Available Models
-
-### 1. ResNet-50 (Sentinel-2 Only)
-**Config:** `resnet_s2`
-**Description:** Standard classification model using 10 Sentinel-2 bands.
-**Usage:**
+**ResNet-50 (Sentinel-2 Only):**
 ```bash
-python src/main.py model=resnet_s2 input_path=/path/to/S2_tile output_path=./results
+gsip infer model=resnet_s2 input_path=/path/to/S2_tile output_path=./results
 ```
 
-### 2. ResNet-50 (Sentinel-1 & Sentinel-2)
-**Config:** `resnet_all`
-**Description:** Multi-modal classification using 12 bands (2 S1 + 10 S2). **Requires matching Sentinel-1 data** to be present or configured in the data loader.
-**Usage:**
+**ResNet-50 (Sentinel-1 & Sentinel-2):**
+Requires matching Sentinel-1 data.
 ```bash
-python src/main.py model=resnet_all input_path=/path/to/S2_tile output_path=./results
+gsip infer model=resnet_all input_path=/path/to/S2_tile output_path=./results
 ```
 
-### 3. ConvNeXt V2 (Sentinel-2)
-**Config:** `convnext_s2`
-**Description:** Modern ConvNeXt architecture for classification (10 bands).
-**Usage:**
+**Prithvi-100M Flood Segmentation:**
 ```bash
-python src/main.py model=convnext_s2 input_path=/path/to/S2_tile output_path=./results
+gsip infer model=prithvi_segmentation input_path=/path/to/S2_tile output_path=./results
 ```
 
-### 4. Prithvi-100M Flood Segmentation
-**Config:** `prithvi_segmentation`
-**Description:** A geospatial foundation model fine-tuned for flood segmentation.
-**Note:** This model outputs a segmentation map. The current pipeline will save the raw outputs, but the visualization (Class Map) might need interpretation as "Background" vs "Flood".
-**Usage:**
-```bash
-python src/main.py model=prithvi_segmentation input_path=/path/to/S2_tile output_path=./results
-```
+---
 
-## Benchmarking Mode
+## 2. Batch Execution Suite (`gsip suite`)
 
-To run a comprehensive performance benchmark suite across multiple models and configurations, use the `src/benchmark_suite.py` script.
+To run multiple experiments back-to-back (e.g., for benchmarking or large-scale processing), use `gsip suite`.
 
-### Using a Configuration File
+### Configuration Format (`batch_config.json`)
 
-The benchmark suite is controlled by a JSON configuration file. By default, it looks for `benchmark_config.json` in the root directory.
-
-```bash
-python src/benchmark_suite.py
-```
-
-To specify a custom configuration file:
-
-```bash
-python src/benchmark_suite.py --config my_custom_benchmarks.json
-```
-
-### Configuration Format
-
-The JSON file should follow this structure:
+The batch configuration is highly flexible, supporting simple runs, complex matrices (Cartesian products), and hierarchical overrides.
 
 ```json
 {
-  "output_dir": "out/benchmarks_final",
-  "benchmarks": [
+  "output_dir": "out/batch_runs",
+  "global_overrides": ["+pipeline.output.save_preview=true"],
+  "runs": [
     {
       "name": "resnet_s2",
-      "input_path": "/path/to/S2_tile.SAFE",
-      "label": "resnet_s2_baseline",
-      "config_overrides": [
-        "+pipeline.tiling.max_memory_gb=16"
-      ]
+      "input_path": "/path/to/tile1.SAFE"
     },
     {
-      "name": "convnext_s2",
-      "input_path": "/path/to/S2_tile.SAFE"
+      "models": [
+        "resnet_s2",
+        {
+          "name": "convnext_s2",
+          "label": "Experimental",
+          "config_overrides": ["+special_param=1"]
+        }
+      ],
+      "input_path": ["/path/to/tile2.SAFE", "/path/to/tile3.SAFE"],
+      "config_overrides": ["+pipeline.tiling.max_memory_gb=16"]
     }
   ]
 }
 ```
 
-*   `output_dir`: Where the results for all runs will be stored.
-*   `benchmarks`: A list of run configurations.
-    *   `name`: The model configuration name (must match a file in `configs/model/`, e.g., `resnet_s2`).
-    *   `input_path`: Path to the input tile or folder.
-    *   `label` (Optional): A custom name for this run folder.
-    *   `config_overrides` (Optional): A list of Hydra override strings (e.g., changing memory limits or patch sizes).
+#### Key Concepts
 
-This script orchestrates back-to-back runs, manages GPU cooldowns to ensure fair comparisons, and stores artifacts in per-run directories (e.g., `out/benchmarks_final/label/timestamp/`).
+1.  **Global Overrides:** Applied to *every* job in the suite.
+2.  **Run Groups:** The `runs` list contains groups. Each group generates jobs based on the combination of its models and inputs.
+3.  **Cartesian Product:** If you provide a list of 2 models and 3 inputs, the system generates **6 jobs** (Model A on Input 1, Model A on Input 2, ..., Model B on Input 3).
+4.  **Overrides Hierarchy:** Configuration is merged in this order (later overrides overwrite earlier ones):
+    1.  `global_overrides` (Root)
+    2.  `config_overrides` (Run Group Shared)
+    3.  `overrides` dictionary (Mapped by Model Name)
+    4.  `config_overrides` inside a Model Object (Specific)
 
-**Analysis:**
-While the script prints a summary table to the console, it is highly recommended to use **GSIP Studio** to visualize the time-series resource usage and spatial outputs of these benchmarks.
+#### Fields Reference
+
+*   `models` (or `name`): A single string, a list of strings, or a list of objects.
+    *   Object format: `{ "name": "...", "label": "...", "config_overrides": [...] }`
+*   `input_path`: A single path string or a list of path strings.
+*   `label`: Optional. If a list, it maps 1:1 to the models list.
+*   `overrides`: A dictionary mapping model names to specific override lists (e.g., `{ "resnet_s2": ["+foo=bar"] }`).
+
+### Running the Suite
+```bash
+# Run using default 'batch_config.json'
+gsip suite
+
+# Run using a custom config
+gsip suite --config my_experiments.json
+```
+
+### Exporting Results
+You can package your results into a ZIP archive directly from the CLI.
+
+*   **Partial Export (Default):** Excludes large TIFF files to save space (useful for sharing analysis data).
+    ```bash
+    gsip suite --export-partial results.zip out/batch_runs
+    ```
+*   **Full Export:** Includes everything (TIFFs, logs, JSONs).
+    ```bash
+    gsip suite --export-full full_backup.zip out/batch_runs
+    ```
+
+---
+
+## 3. GSIP Studio (`gsip studio`)
+
+GSIP Studio is a native desktop application for visualizing results and performance metrics.
+
+```bash
+gsip studio
+```
+
+### Features
+*   **Performance Monitoring:** Interactive charts for Memory (RAM) and GPU usage.
+*   **Spatial Analysis:** View classification maps, confidence, and entropy side-by-side.
+*   **Config Editor:** Edit YAML configurations with a built-in "Refresh" feature.
+*   **Global Comparison:** Compare peak memory and duration across all your runs.
+
+---
+
+## 4. Management Tools (`gsip manage`)
+
+Use this to quickly extend the pipeline with new models or output formats.
+
+```bash
+# List all installed components
+gsip manage list
+
+# Create a new adapter template
+gsip manage create-adapter my_new_model --class-name MyModel
+
+# Link an existing script
+gsip manage add-adapter path/to/my_script.py
+```
+
+See [EXTENDING.md](EXTENDING.md) for detailed development guides.
+
+---
 
 ## Advanced Configuration: Reporters
 
-GSIP uses a "Reporter" system to generate outputs. You can enable, disable, or add new output formats directly from the command line.
+You can enable/disable output formats (Reporters) on the fly using Hydra syntax with `gsip infer`.
 
 **Disable a Reporter (e.g., Preview):**
-Use the `~` prefix to remove a key.
 ```bash
-python src/main.py model=resnet_s2 ... ~pipeline.reporters.preview
+gsip infer model=resnet_s2 ... ~pipeline.reporters.preview
 ```
 
 **Add a Custom Reporter:**
-You can inject a new reporter configuration using the `+` prefix.
 ```bash
-python src/main.py model=resnet_s2 ... \
+gsip infer model=resnet_s2 ... \
   +pipeline.reporters.my_stats._target_=my_custom_package.StatisticsReporter
 ```
-
-**Enable Optional Probability Cubes:**
-The `ProbabilityReporter` is available but disabled by default in some configs to save space. To enable it:
-```bash
-python src/main.py model=resnet_s2 ... \
-  +pipeline.reporters.probs._target_=eo_core.reporters.probability.ProbabilityReporter
-```
-
-## Understanding Outputs
-
-Check the `out/` directory for results:
-*   `*_class.tif`: The final class/segmentation map.
-*   `*_maxprob.tif`: Confidence map.
-*   `*_entropy.tif`: Uncertainty map (Shannon Entropy).
-*   `*_global_probs.npy`: Single 1D array of average class probabilities for the *entire* tile.
-*   `preview.png`: A quick look RGB image of the classification.
-*   `viewer.html`: An interactive web-based viewer for the result.

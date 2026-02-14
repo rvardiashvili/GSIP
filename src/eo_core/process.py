@@ -305,10 +305,6 @@ def main_hydra(cfg: DictConfig):
     # Determine Device
     gpu_index = cfg.pipeline.distributed.get("gpu_index", 0)
     device_str = f"cuda:{gpu_index}" if torch.cuda.is_available() else "cpu"
-    if torch.cuda.is_available():
-        log.info(f"DEBUG: GPU Configuration - Requested Index: {gpu_index}, Current PyTorch Device: {torch.cuda.current_device()}")
-    else:
-        log.info("DEBUG: CUDA not available, using CPU")
 
     # --- 1. Instantiate Adapter First (Dependency Injection) ---
     # This allows us to query the adapter for its requirements (bands, classes, patch_size)
@@ -326,7 +322,6 @@ def main_hydra(cfg: DictConfig):
 
         # Inject Device info
         adapter_cfg["params"]["device"] = device_str
-        log.info(f"DEBUG: Adapter Params Device set to: {adapter_cfg['params'].get('device')}")
 
         # Inject file patterns from data_source
         if "s2_file_pattern" in cfg.data_source:
@@ -543,9 +538,6 @@ def main_hydra(cfg: DictConfig):
             try:
                 processed_input = engine.preprocess(raw_input)
                 dur_prep = time.perf_counter() - t_preprocess_start
-                log.debug(
-                    f"[{dur_prep:.4f}s] Main: engine.preprocess for chunk ({r},{c})"
-                )
                 benchmarker.record_event("cpu_preprocess_duration", dur_prep)
                 yield processed_input
             except Exception as e:
@@ -612,7 +604,6 @@ def main_hydra(cfg: DictConfig):
             t_predict_raw_start = time.perf_counter()
             logits_t, metadata = engine.predict_raw(model_input)
             dur_pred = time.perf_counter() - t_predict_raw_start
-            log.debug(f"[{dur_pred:.4f}s] Main: engine.predict_raw")
             benchmarker.record_event("gpu_inference_duration", dur_pred)
 
             # 3. Pass to Writer (CPU)

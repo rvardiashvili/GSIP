@@ -1,11 +1,15 @@
 import sys
+import os
 import gi
 gi.require_version('Gtk', '4.0')
 from gi.repository import Gtk, GLib
 
-# Adjust path to find core modules if needed
-import os
-sys.path.append(os.getcwd())
+# Fix imports: Add project root to sys.path
+# Assumes structure: [root]/gtk_client/main.py
+current_file = os.path.abspath(__file__)
+project_root = os.path.dirname(os.path.dirname(current_file))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 from gtk_client.ui.main_window import MainWindow
 
